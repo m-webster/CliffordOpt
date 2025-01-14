@@ -3,10 +3,9 @@ import numpy as np
 from CliffordOps import *
 from clifford_synthesis import *
 from NHow import *
-import concurrent.futures
-import argparse
 
 
+## paste cicuit text in qasm format here
 mytext = '''OPENQASM 2.0;
 include "qelib1.inc";
 qreg q[10];
@@ -44,13 +43,59 @@ s q[9];
 z q[9];
 h q[9];'''
 
+###############################################
+## method: choose from 'pytket','qiskit','voltano','greedy','astar','stim'
+###############################################
+method = pytket
+
+###############################################
+## methodName blank, apart from:
+###############################################
+## Qiskit: 'greedy','ag'
+## Pytket: 'FullPeepholeOptimise','CliffordSimp','SynthesiseTket','CliffordResynthesis'
+methodName = "FullPeepholeOptimise"
+
 qc = qiskit.QuantumCircuit.from_qasm_str(mytext)
 S = qiskit.quantum_info.Clifford(qc)
 U = ZMat(S.symplectic_matrix)
 
 m,n = symShape(U)
 
-vList,ix,CList = csynth_astar(U,r1=1.6,r2=1.4,qMax=10000)
-print('2-qubit gates',len(vList))
-opList = trans2opList(vList,ix,CList)
+## starting time
+sT = currTime()
+
+## PyTket
+if method == 'pytket':
+    opList = csynth_tket(mytext,methodName)
+
+## Qiskit
+elif method == 'qiskit':
+    circ = csynth_qiskit(S,methodName)
+    opList = qiskit2opList(circ)
+
+## Voltano
+elif method == 'voltano':
+    vList, ix, CList = csynth_voltano(U)
+    opList = trans2opList(vList,ix,CList)
+
+## Greedy Algorithm
+elif method == 'greedy':
+    vList, ix, CList = csynth_greedy(U)
+    opList = trans2opList(vList,ix,CList)
+
+## Astar
+elif method == 'astar':
+    vList, ix, CList = csynth_astar(U,r1,r2,qMax)
+    opList = trans2opList(vList,ix,CList)
+    
+## STIM
+elif method == 'stim':
+    opList = csynth_stim(U)
+
+## if no method specified, just count gates in input circuit
+else:
+    opList = qiskit2opList(qc)
+
+print('Run time',currTime()-sT)
+print('Entangling Gate Count',entanglingGateCount(opList))
 print(opList2str(opList))

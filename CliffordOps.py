@@ -173,6 +173,23 @@ def bin2GL(xList):
                 A[j] ^= A[i]
     return A
 
+def bin2GL(xList):
+    '''Convert a binary string to an element of GL_2 on r bits'''
+    A = []
+    r = len(xList)
+    for i in range(r):
+        x = xList[i]
+        if len(A) == 0:
+            A.append(x)
+        else:
+            H,p = getH(ZMat(A),2,retPivots=True)
+            b = ZMatZeros(r)
+            p1 = invRange(r,p)
+            b[p1] = x[:r-i]
+            uA = matMul(x[r-i:],A,2)[0]
+            A.append(b ^ uA)
+    return ZMat(A)
+
 ########################################################################
 ## Generation of Clifford Operators
 ########################################################################

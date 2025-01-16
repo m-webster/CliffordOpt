@@ -10,6 +10,7 @@ import csv
 import treap
 import sys
 import os
+import pyzx
 ## commented out as these don't compile on the cluster
 import pytket, pytket.tableau, pytket.passes, pytket.qasm
 
@@ -30,7 +31,7 @@ def bin2trans(stabs,destabs):
         U[0,n+i:] = stabs[i][n-i:]
         U[1,i:n] = destabs[i][:n-i]
         U[1,n+i:] = destabs[i][n-i:]        
-        vListi,ixi,CListi = csynth_voltano(U)
+        vListi,ixi,CListi = csynth_volanto(U)
         vList.extend(reversed(vListi))
         j = ixi[0]
         # print(func_name(),i,j)
@@ -123,10 +124,86 @@ def readMatFile(fileName):
             temp.append(np.reshape(A,(n,n)))
     return temp
 
-def bravyi_run(circuits,i,params):
-    '''Run optimisation for circuits in Bravyi et al'''
-    circuitName, mytext = circuits[i]
 
+def synth_GL2(U,method,r1=1,r2=1,qMax=10000,methodName=""):
+    ## convert GL2 to Symplectic
+    S = symCNOT(U)
+    S1 = S.copy()
+    m,n = U.shape
+        
+    ## make a Qiskit quantum circuit and Clifford from saved text
+    # qc = qiskit.QuantumCircuit.from_qasm_str(mytext)
+    # S = qiskit.quantum_info.Clifford(qc)
+    # U = ZMat(S.symplectic_matrix)
+    qc = sym2qc(S)
+    mytext = qc2qasm(qc)
+
+    ## starting time
+    sT = currTime()
+    ## PyTket
+    if method == 'pytket':
+        opList = csynth_tket(mytext,methodName)
+
+    elif method == 'CNOT_gaussian':
+        ix,CXList = CNOT_GaussianElim(U)
+        opList = CNOT2opList(ix,CXList)
+
+    elif method == 'CNOT_Patel':
+        ix,CXList = CNOT_Patel(U)
+        opList = CNOT2opList(ix,CXList)
+
+    elif method == 'CNOT_greedy':
+        ix,CXList = CNOT_greedy(U)
+        opList = CNOT2opList(ix,CXList)
+
+    elif method == 'CNOT_depth':
+        ix,CXList = CNOT_greedy_depth(U)
+        opList = CNOT2opList(ix,CXList)
+
+    ## SAT
+    elif method == 'sat':
+        C = qiskit.quantum_info.Clifford(qc)
+        opList = csynth_SAT(C)
+
+    ## Qiskit
+    elif method == 'qiskit':
+        C = qiskit.quantum_info.Clifford(qc)
+        circ = csynth_qiskit(C,methodName)
+        opList = qiskit2opList(circ)
+
+    ## volanto
+    elif method == 'volanto':
+        vList, ix, CList = csynth_volanto(S)
+        opList = trans2opList(vList,ix,CList)
+
+    ## Greedy Algorithm
+    elif method == 'greedy':
+        vList, ix, CList = csynth_greedy(S)
+        opList = trans2opList(vList,ix,CList)
+
+    ## Astar
+    elif method == 'astar':
+        vList, ix, CList = csynth_astar(S,r1,r2,qMax)
+        opList = trans2opList(vList,ix,CList)
+        
+    ## STIM
+    elif method == 'stim':
+        opList = csynth_stim(S)
+    
+    ## if no method specified, just count gates in input circuit
+    else:
+        opList = qiskit2opList(qc)
+
+    r = entanglingGateCount(opList)
+    t = currTime()-sT
+    c = opList2str(opList,ch=" ")
+    if method in ['volanto','greedy','astar']:
+        check = transTest(S1,vList,ix,CList)
+    else:
+        check = ""
+    return r,t,c,check
+
+def synth_clifford(mytext,method,r1=1,r2=1,qMax=10000,methodName=""):
     ## make a Qiskit quantum circuit and Clifford from saved text
     qc = qiskit.QuantumCircuit.from_qasm_str(mytext)
     S = qiskit.quantum_info.Clifford(qc)
@@ -137,46 +214,56 @@ def bravyi_run(circuits,i,params):
     sT = currTime()
 
     ## PyTket
-    if params.method == 'pytket':
-        opList = csynth_tket(mytext,params.methodName)
+    if method == 'pytket':
+        opList = csynth_tket(mytext,methodName)
+
+    ## PYZX
+    elif method == 'pyzx':
+        opList = csynth_pyzx(mytext)
 
     ## Qiskit
-    elif params.method == 'qiskit':
-        circ = csynth_qiskit(S,params.methodName)
+    elif method == 'qiskit':
+        circ = csynth_qiskit(S,methodName)
         opList = qiskit2opList(circ)
 
-    ## Voltano
-    elif params.method == 'voltano':
-        vList, ix, CList = csynth_voltano(U)
+    ## volanto
+    elif method == 'volanto':
+        vList, ix, CList = csynth_volanto(U)
         opList = trans2opList(vList,ix,CList)
 
     ## Greedy Algorithm
-    elif params.method == 'greedy':
+    elif method == 'greedy':
         vList, ix, CList = csynth_greedy(U)
         opList = trans2opList(vList,ix,CList)
 
     ## Astar
-    elif params.method == 'astar':
-        vList, ix, CList = csynth_astar(U,params.r1,params.r2,params.qMax)
+    elif method == 'astar':
+        vList, ix, CList = csynth_astar(U,r1,r2,qMax)
         opList = trans2opList(vList,ix,CList)
         
     ## STIM
-    elif params.method == 'stim':
+    elif method == 'stim':
         opList = csynth_stim(U)
     
     ## if no method specified, just count gates in input circuit
     else:
         opList = qiskit2opList(qc)
 
-    ## write results to file
-    f = open(params.outfile,'a')
     r = entanglingGateCount(opList)
     t = currTime()-sT
     c = opList2str(opList,ch=" ")
-    if params.method in ['voltano','greedy','astar']:
+    if method in ['volanto','greedy','astar']:
         check = transTest(U1,vList,ix,CList)
     else:
         check = ""
+    return r,t,c,check
+
+def bravyi_run(circuits,i,params):
+    '''Run optimisation for circuits in Bravyi et al'''
+    circuitName, mytext = circuits[i]
+    r,t,c,check = synth_clifford(mytext,params.method,params.r1,params.r2,params.qMax,params.methodName)
+    ## write results to file
+    f = open(params.outfile,'a')
     if params.astarRange:
         f.write(f'{i+1}\t{circuitName}\t{params.r1}\t{params.r2}\t{r}\t{t}\t{check}\t{c}\n')
     else:
@@ -187,92 +274,16 @@ def bravyi_run(circuits,i,params):
 
 
 def random_run(UList,i,params):
-    '''Run optimisation for circuits in Bravyi et al'''
+    '''Run optimisation for randomly generated circuits'''
     U = UList[i]
-    
-    ## convert GL2 to Symplectic
     if params.t == 'GL2':
-        U = symCNOT(U)
-
-    m,n = symShape(U)
-        
-    ## make a Qiskit quantum circuit and Clifford from saved text
-    # qc = qiskit.QuantumCircuit.from_qasm_str(mytext)
-    # S = qiskit.quantum_info.Clifford(qc)
-    # U = ZMat(S.symplectic_matrix)
-    qc = sym2qc(U)
-    mytext = qc2qasm(qc)
-
-    U1 = U.copy()
-    ## starting time
-    sT = currTime()
-
-
-    ## PyTket
-    if params.method == 'pytket':
-        opList = csynth_tket(mytext,params.methodName)
-
-    elif params.method == 'CNOT_gaussian':
-        ix,CXList = CNOT_GaussianElim(U[:n,:n])
-        opList = CNOT2opList(ix,CXList)
-
-    elif params.method == 'CNOT_Patel':
-        ix,CXList = CNOT_Patel(U[:n,:n])
-        opList = CNOT2opList(ix,CXList)
-
-    elif params.method == 'CNOT_greedy':
-        ix,CXList = CNOT_greedy(U[:n,:n])
-        opList = CNOT2opList(ix,CXList)
-
-    elif params.method == 'CNOT_depth':
-        ix,CXList = CNOT_greedy_depth(U[:n,:n])
-        opList = CNOT2opList(ix,CXList)
-
-    ## SAT
-    elif params.method == 'sat':
-        C = qiskit.quantum_info.Clifford(qc)
-        opList = csynth_SAT(C)
-
-    ## Qiskit
-    elif params.method == 'qiskit':
-        C = qiskit.quantum_info.Clifford(qc)
-        circ = csynth_qiskit(C,params.methodName)
-        opList = qiskit2opList(circ)
-
-    ## Voltano
-    elif params.method == 'voltano':
-        vList, ix, CList = csynth_voltano(U)
-        opList = trans2opList(vList,ix,CList)
-
-    ## Greedy Algorithm
-    elif params.method == 'greedy':
-        vList, ix, CList = csynth_greedy(U)
-        opList = trans2opList(vList,ix,CList)
-
-    ## Astar
-    elif params.method == 'astar':
-        vList, ix, CList = csynth_astar(U,params.r1,params.r2,params.qMax)
-        opList = trans2opList(vList,ix,CList)
-        
-    ## STIM
-    elif params.method == 'stim':
-        opList = csynth_stim(U)
-    
-    ## if no method specified, just count gates in input circuit
+        r,t,c,check = synth_GL2(U,params.method,params.r1,params.r2,params.qMax,params.methodName)
+        m,n = U.shape
     else:
-        opList = qiskit2opList(qc)
+        r,t,c,check = synth_clifford(U,params.method,params.r1,params.r2,params.qMax,params.methodName)
+        m,n = symShape(U)
 
-    ## write results to file
     f = open(params.outfile,'a')
-    r = entanglingGateCount(opList)
-    t = currTime()-sT
-    c = opList2str(opList,ch=" ")
-    if params.method in ['voltano','greedy','astar']:
-        check = transTest(U1,vList,ix,CList)
-    elif params.method in ['CNOT_greedy','CNOT_depth','CNOT_gaussian','CNOT_Patel']:
-        check = CXTest(U1[:n,:n],ix,CXList)
-    else:
-        check = ""
     if params.astarRange:
         f.write(f'{i+1}\t{n}\t{params.r1}\t{params.r2}\t{r}\t{t}\t{check}\t{c}\n')
     else:
@@ -291,6 +302,8 @@ def set_global_params(params):
     elif params.method == 'qiskit':
         methods = ['greedy','ag']
         params.methodName = methods[params.submethod]
+    else:
+        params.methodName = ""
     ## for astar, record r1, r2, qmax
     if params.method == 'astar':
         myfile = f"{params.file}-{params.method}-r{params.r1}-{params.r2}-q{params.qMax}-{mydate}.txt"
@@ -669,10 +682,15 @@ def transWt(U,r1=1,r2=1):
 
     ## Heuristic estimating number of steps required for completion
     h = (matSum(UR2) - n)/r2 + matSum(UR1)/r1
+
     ## Number of invertible mats in each col/row
     s2 = vecJoin(matColSum(UR2), matColSum(UR2.T))
     ## Number of rank 1 2x2 mats in each col/row
     s1 = vecJoin(matColSum(UR1), matColSum(UR1.T))
+
+    h = 2 * r1 * np.sum(np.log2(s1)) + 2 * r2 * np.sum(np.log2(s2))
+    ## what if col sum of UR1 is zero??
+    # h = 2 * r1 * np.sum(np.log2(s1 + s2))
     return h, tuple(sorted((s2-n)*n + s1))
 
 def overlapWt(A):
@@ -724,7 +742,7 @@ def ElimRk2(Fj,Fk):
     (c,d) = Fk[1]
     return (a,c,b,d)
 
-def csynth_voltano(U):
+def csynth_volanto(U):
     '''Decomposition of symplectic matrix U into 2-transvections, SWAP and single-qubit Clifford layers'''
     ## we will reduce UC to single-qubit Clifford layer
     UC = U.copy()
@@ -1047,6 +1065,18 @@ def csynth_SAT(S):
     return qiskit2opList(qc_alt)
 
 #########################################################################################################
+## PyZX
+#########################################################################################################
+
+def csynth_pyzx(mytext):
+    zxcircuit = pyzx.Circuit.from_qasm(mytext)
+    zxg = zxcircuit.to_graph()
+    pyzx.simplify.full_reduce(zxg)
+    c1=pyzx.extract_circuit(zxg)
+    qc = qiskit.QuantumCircuit.from_qasm_str(c1.to_qasm())
+    return qiskit2opList(qc)
+
+#########################################################################################################
 ## Quantinuum tket: https://docs.quantinuum.com/tket/
 ## Various optimisation algorithms - best seems to be FullPeepholeOptimise
 #########################################################################################################
@@ -1057,6 +1087,7 @@ def tket2opList(circ):
     for op in circ.get_commands():
         opList.append((str(op.op),[q.index[0] for q in op.qubits]))
     return opList
+
 
 def csynth_tket(mytext,option='FullPeepholeOptimise'):
     '''tket synthesis - various options'''

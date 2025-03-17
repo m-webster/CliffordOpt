@@ -1,0 +1,11 @@
+mqt.qmap==2.8.0
+numba==0.59.1
+numpy==1.26.4
+openqasm3==1.0.0
+pytket==1.36.0
+qiskit==1.1.1
+qiskit-qasm3-import==0.5.1
+scipy==1.14.1
+stim==1.13.0
+treap==2.0.10
+pyzx==0.8.0

@@ -5,7 +5,7 @@ Python package for heuristic and optimal Clifford circuit synthesis.
 ## Installation
 PyPI: `pip install cliffordopt`
 
-Source code: Download this repository and run `pip install .`
+Source code: Download this repository and run `pip install -e .`
 
 ## Overview
 This software enables users to synthesize Clifford and CNOT circuits.
@@ -123,10 +123,29 @@ The analyseOptDB(n,mode,minDepth) function prints out the number of equivalence 
 
 The correlDB(mode,n,minDepth) function calculates the H_sum and H_prod metrics, then calculates the correlation coefficient and slope of the line of best fit with d.
 
+##  Pauli Corrections - New 11 Mar 2026
+The synthesis now includes a set of Pauli corrections at the beginning of the circuit - this caters for any necessary sign corrections for the circuit.
+
+##  Export to Qiskit Circuit Format - New 11 Mar 2026
+The output circuits can now be exported to Qiskit form using the function oplist2qiskit.
+This function replaces all 2-qubit transvections with RZZ gates, conjugated by single-qubit Cliffords where required. 
+It also replaces the initial qubit permutation with a series of SWAP gates. 
+
+
+
+
 ## Citation 
-Paper
+Paper: https://arxiv.org/abs/2503.14660
 
-
+@misc{webster2025heuristicoptimalsynthesiscnot,
+      title={Heuristic and Optimal Synthesis of CNOT and Clifford Circuits}, 
+      author={Mark Webster and Stergios Koutsioumpas and Dan E Browne},
+      year={2025},
+      eprint={2503.14660},
+      archivePrefix={arXiv},
+      primaryClass={quant-ph},
+      url={https://arxiv.org/abs/2503.14660}, 
+}
 
 Software
 ```

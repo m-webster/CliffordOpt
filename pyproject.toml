@@ -1,10 +1,10 @@
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+requires = ["poetry-core>=1.0.1"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "cliffordopt"
-version = "0.0.1"
+version = "2.0.1"
 description = "Clifford and CNOT Circuit optimisation."
 license = "GNUv3"
 authors = ["Mark Webster <mark.acacia@gmail.com>"]
@@ -36,10 +36,9 @@ stim = ">=1.13.0"
 numpy = ">=1.26.2"
 qiskit = ">=1.1.1"
 igraph = ">=0.11.8"
-pytket = ">=1.36.0"
 pyzx = ">=0.8.0"
-rustiq = ">=1.0.0"
 treap = ">=2.0.10"
+numba = ">=0.59.1"
 
 checks-superstaq = { version = ">=0.5.31", optional = true }
 

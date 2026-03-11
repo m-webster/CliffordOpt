@@ -29,12 +29,12 @@ mytext = '''10011
 
 ## Fig7 from A Cost Minimization Approach to Synthesis of Linear Reversible Circuits
 ##CX-count quoted: 8; opt: 8; opt-depth 4
-# mytext = '''111001
-# 011011
-# 001100
-# 101101
-# 101111
-# 001001'''
+mytext = '''111001
+011011
+001100
+101101
+101111
+001001'''
 
 ## Fig11 from A Cost Minimization Approach to Synthesis of Linear Reversible Circuits
 ## quoted: 59
@@ -67,6 +67,15 @@ mytext = '''10011
 # 1000010110
 # 0001001111'''
 
+## Prefix sum from Improved Clifford operations in constant commutative depth
+# mytext = '''10000000
+# 11000000
+# 11100000
+# 11110000
+# 11111000
+# 11111100
+# 11111110
+# 11111111'''
 
 ###############################################
 ## Global parameters - don't change!!
@@ -80,11 +89,11 @@ params.mode = 'GL'
 
 ## choose a method
 params.method = 'optimal'
-params.method = 'astar'
-params.method = 'greedy'
+# params.method = 'astar'
+# params.method = 'greedy'
 
 ## optimise for depth or gate count
-params.minDepth = False
+params.minDepth = True
 
 ## heuristic settings
 params.hv = 1 ## vector

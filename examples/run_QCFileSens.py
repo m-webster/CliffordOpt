@@ -4,14 +4,14 @@ from examples.run_utils import *
 
 if __name__ == '__main__':
     parser = defaultParser()
-    parser.add_argument("-r0", help="For astar range only: r0 - lowest r",type=float, default=2.2)
-    parser.add_argument("-r1", help="For astar range only: r1 - highest r",type=float, default=1.9)
+    parser.add_argument("--r0", help="For astar range only: r0 - lowest r",type=float, default=2.2)
+    parser.add_argument("--r1", help="For astar range only: r1 - highest r",type=float, default=1.9)
     parser.add_argument("--rStep", help="For astar range only: step size",type=float, default=1.9)
     params = parser.parse_args()
     params.astarRange = 1
     params.method = 'astar'
     params.mode = 'QC'
-    params.infile = f'QCFiles/{params.file}.csv'
+    params.infile = f'QCFiles/{params.file}'
     temp = params.file.split("_")
     params.t = temp[0]
     set_global_params(params)

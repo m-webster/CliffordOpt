@@ -2,6 +2,7 @@ import argparse
 import sys
 import os
 import csv
+import re
 from cliffordopt import *
 
 ########################################################
@@ -11,6 +12,7 @@ from cliffordopt import *
 def synthSave(C,i,params,circuitName=None):
     '''Synthesize circuit C in text form. Interpretation of C depends on params.mode - can be a circuit or binary string'''
     CName = "" if circuitName is None else f'\t{circuitName}'
+    print(f'starting {i}')
     if params.mode == 'QC':
         n,gateCount,depth,procTime,check,circ = synth_QC(C,params)
     else:
@@ -28,6 +30,7 @@ def synthSave(C,i,params,circuitName=None):
         f.write(f'{i+1}{CName}\t{n}\t{gateCount}\t{depth}\t{procTime}\t{check}\t{circ}\n')
     f.close()
     ## return result + exec time + opList
+    print(f'finished {i}')
     return (i,n,gateCount,depth,procTime,check,circ)
 
 ######################################################
@@ -37,18 +40,20 @@ def synthSave(C,i,params,circuitName=None):
 def defaultParser():
     '''parser for command line python scripts eg random_run, random_range, bravyi_run, bravyi_range'''
     parser = argparse.ArgumentParser()
-    parser.add_argument("-f","--file", help="Source File for Matrices",type=str, default='GL_7')
-    parser.add_argument("-m","--method", help="Synthesis method - options are volanto, greedy, astar, qiskit, stim, pytket",type=str, default='greedy')
-    parser.add_argument("-s","--submethod", help="Submethod for qiskit or pytket only. Qiskit: 'greedy'=0,'ag'=1. Pytket: 'FullPeepholeOptimise'=0,'CliffordSimp'=1,'SynthesiseTket'=2,'CliffordResynthesis'=3",type=int, default=0)
+    parser.add_argument("--file", help="Source File for Matrices",type=str, default='GL_7.txt')
+    parser.add_argument("--method", help="Synthesis method - options are volanto, greedy, astar, qiskit, stim, pytket",type=str, default='greedy')
+    parser.add_argument("--submethod", help="Submethod for qiskit or pytket only. Qiskit: 'greedy'=0,'ag'=1. Pytket: 'FullPeepholeOptimise'=0,'CliffordSimp'=1,'SynthesiseTket'=2,'CliffordResynthesis'=3",type=int, default=0)
     parser.add_argument("--mode", help="Type of Matrix",type=str, default='GL')  
+    parser.add_argument("--ixMin", help="Start at circuit number ixMin",type=int, default=0)  
+    parser.add_argument("--ixMax", help="Finish at circuit number ixMax",type=int, default=0)  
     parser.add_argument("--minDepth", help="Run Minimum Depth Optimisation",type=int, default=0)  
-    parser.add_argument("-wMax", help="For greedy only: wMax is the max number of iterations without improvement before abandoning. If set to zero, never abandon.",type=int, default=0)
-    parser.add_argument("-hv", help="For greedy only: hv=1 means vector h, float otherwise",type=int, default=1) 
-    parser.add_argument("-hr", help="For astar only: r is the weighting of colsums when calculating h",type=float, default=3)
-    parser.add_argument("-hl", help="For greedy/astar only: if log=1 the use log of colsums calculating h",type=int, default=1)
-    parser.add_argument("-ht", help="For greedy/astar only: if t=1 add transpose when calculating h",type=int, default=1)
-    parser.add_argument("-hi", help="For greedy/astar only: if i=1 add inverse calculating h",type=int, default=1)
-    parser.add_argument("-q","--qMax", help="For astar only: max size of the priority queue.",type=int, default=1000)
+    parser.add_argument("--wMax", help="For greedy only: wMax is the max number of iterations without improvement before abandoning. If set to zero, never abandon.",type=int, default=0)
+    parser.add_argument("--hv", help="For greedy only: hv=1 means vector h, float otherwise",type=int, default=1) 
+    parser.add_argument("--hr", help="For astar only: r is the weighting of colsums when calculating h",type=float, default=3)
+    parser.add_argument("--hl", help="For greedy/astar only: if log=1 the use log of colsums calculating h",type=int, default=1)
+    parser.add_argument("--ht", help="For greedy/astar only: if t=1 add transpose when calculating h",type=int, default=1)
+    parser.add_argument("--hi", help="For greedy/astar only: if i=1 add inverse calculating h",type=int, default=1)
+    parser.add_argument("--qMax", help="For astar only: max size of the priority queue.",type=int, default=1000)
     parser.add_argument("--astarRange","-a", help="Astar, range of r values",type=int, default=0)
     return parser
 
@@ -66,14 +71,14 @@ def set_global_params(params):
         params.methodName = ""
     ## for astar, record r1, r2, qmax
     if params.astarRange:
-        myfile = f"{params.file}-{params.method}-hr{params.hr}-l{params.hl}-t{params.ht}-i{params.hi}-q{params.qMax}-{mydate}.txt"
-    elif params.method in {'astar','CNOT_astar'}:
-        myfile = f"{params.file}-{params.method}-hr{params.hr}-l{params.hl}-t{params.ht}-i{params.hi}-q{params.qMax}-{mydate}.txt"
+        myfile = f"{params.file}-{params.method}-hv{params.hv}-hr{params.hr}-l{params.hl}-t{params.ht}-i{params.hi}-q{params.qMax}-{mydate}.txt"
+    elif params.method in {'astar','CNOT_astar','CNOT_greedy','greedy'}:
+        myfile = f"{params.file}-{params.method}-hv{params.hv}-hr{params.hr}-l{params.hl}-t{params.ht}-i{params.hi}-q{params.qMax}-{mydate}.txt"
     elif params.method in {'qiskit','pytket'}:
         myfile = f"{params.file}-{params.method}-{params.methodName}-{mydate}.txt"
     else:
         myfile = f"{params.file}-{params.method}-{mydate}.txt"
-
+    myfile = myfile.replace("/","_")
     cwd = os.getcwd()
     params.outfile = f'{cwd}/results/{myfile}'
     
@@ -113,5 +118,6 @@ def readQCFile(myfile):
                 circuitNames.append(row[0])
                 ## circuits are in the second column
                 circuitList.append(row[1].replace('""','"'))
+                
             c+=1
     return circuitList, circuitNames

@@ -11,7 +11,7 @@ if __name__ == '__main__':
     params.astarRange = 1
     params.method = 'astar'
     params.hv = 0
-    params.infile = f'MatFiles/{params.file}.txt'
+    params.infile = f'MatFiles/{params.file}'
     temp = params.file.split("_")
     params.t = temp[0]
     set_global_params(params)

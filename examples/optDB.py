@@ -6,9 +6,9 @@ from cliffordopt import *
 
 if __name__ == '__main__':
     params = paramObj()
-    n = 4                       ## number of qubits
-    params.mode = 'GL'          ## either GL for CNOT circuits or Sp for general Clifford circuits
-    params.minDepth = True     ## optimal depth = True or optimal gate-count = False
+    n = 4                      ## number of qubits
+    params.mode = 'Sp'          ## either GL for CNOT circuits or Sp for general Clifford circuits
+    params.minDepth = False     ## optimal depth = True or optimal gate-count = False
     nWorkers = 8                ## number of threads to run simultaneously
 
     #####################################################################

@@ -112,10 +112,10 @@ params.mode = 'Sp'
 ## choose a method
 params.method = 'optimal'
 params.method = 'astar'
-# params.method = 'greedy'
+params.method = 'greedy'
 
 ## optimise for depth or gate count
-params.minDepth = True
+params.minDepth = False
 
 ## heuristic settings
 params.hv = 1 ## vector

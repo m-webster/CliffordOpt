@@ -3,20 +3,21 @@ from .NHow import *
 from .CliffordOps import *
 import numpy as np
 import igraph as ig
+import treap
 import sqlite3
 import concurrent.futures
 from importlib import resources as impresources
 from . import opt
 import qiskit, qiskit.circuit, qiskit.qasm2
 import os
+import math
 
 ## required for benchmarking against other methods, but not core functionality
-from mqt import qmap, qecc
 import stim
-import treap
 import pyzx
-import pytket, pytket.tableau, pytket.passes, pytket.qasm
+# import pytket, pytket.qasm, pytket.tableau, pytket.passes
 import rustiq
+# from mqt import qmap, qecc
 
 #########################################################################################################
 ## Main Synthesis Algorithms
@@ -31,30 +32,42 @@ def synth_GL(U,params):
     ## convert GL to Symplectic matrix and run synth_main
     return synth_main(symCNOT(U),params)
 
-def synth_QC(mytext,params):
+def qc2Sym(qc):
+    ## convert to symplectic matrix
+    C = qiskit.quantum_info.Clifford(qc)
+    return ZMat(C.phase), ZMat(C.symplectic_matrix)
+
+def synth_QC(qasmStr,params):
     '''synthesis - Clifford circuit in QASM text format'''
     ## make a Qiskit quantum circuit QASM text
-    qc = qiskit.QuantumCircuit.from_qasm_str(mytext)
-    ## convert to symplectic matrix
-    U = ZMat(qiskit.quantum_info.Clifford(qc).symplectic_matrix)
-    return synth_main(U,params,qc)
+    qc = qiskit.QuantumCircuit.from_qasm_str(qasmStr)
+    sList,U = qc2Sym(qc)
+    # print(pList)
+    # print(ZMatPrint(U,tB=2))
+    ## run synthesis on the symplectic matrix U - comment out to run synthesis on the input circuit
+    # return synth_main(U,params)
+    return synth_main(U,params,qc,sList)
 
-def synth_main(U,params,qc=None):
+def synth_main(U,params,qc=None,sList=None):
     '''main synthesis function - calls various optimsation functions using options in params. U is a symplectic matrix, qc is a Qiskit circuit'''
+    m,n = symShape(U)
     if qc is None:
         qc = sym2qc(U)
-    m,n = symShape(U)
+    if sList is None:
+        sList,U1 = qc2Sym(qc)
+
     ## starting time
     sT = currTime()
 
     ############################################################
-    ## Paper algorithms
+    ## New algorithms
     ############################################################
 
     ## Greedy Algorithm
     if params.method == 'greedy':
         opList, UC = csynth_greedy(U,params)
-        opList = mat2SQC(UC) + opList
+        if len(opList) > 0:
+            opList = mat2SQC(UC) + opList
 
     ## Optimal Algorithm
     elif params.method == 'optimal':
@@ -101,7 +114,7 @@ def synth_main(U,params,qc=None):
 
     ## rustiq: Brugiere et a, A graph-state based synthesis framework for Clifford isometries, https://doi.org/10.22331/q-2025-01-14-1589
     elif params.method == 'rustiq':
-        opList = csynth_rustiq(U)
+        opList = csynth_rustiq(U,params)
 
     ## pyzx: Kissinger, PyZX: Large Scale Automated Diagrammatic Reasoning, http://dx.doi.org/10.4204/EPTCS.318.14
     elif params.method == 'pyzx':
@@ -125,17 +138,143 @@ def synth_main(U,params,qc=None):
     else:
         opList = qiskit2opList(qc)
 
+    if len(opList) > 0:
+        opList = PauliCorrection(opList,n,sList)
+
     depth = len(opListLayers(opList))
     gateCount = entanglingGateCount(opList)
     procTime = currTime()-sT
     circ = opList2str(opList,ch=" ")
     MWalgs = ['optimal','volanto','greedy','astar','CNOT_optimal','CNOT_gaussian','CNOT_Patel','CNOT_greedy','CNOT_astar','CNOT_depth']
     if params.method in MWalgs:
-        check = symTest(U,opList)
+        # check = symTest(U,opList)
+        check = checkSynth(qc,opList)
     else:
         check = ""
     return n,gateCount,depth,procTime,check,circ
 
+def PauliCorrection(opList,n,sList=None):
+    '''Make sign corrections by applying Paulis to beginning of circuit'''
+    if sList is None:
+        sList = ZMatZeros(n * 2)
+    ## check signs of circuit corresponding to opList
+    qc = oplist2qiskit(opList,n)
+    pC, U = qc2Sym(qc)
+    ## difference in signs between this and sList
+    pD = pC ^ sList
+    ## Make phase vector modulo 4 - 1 indicates X, 2 indicates Z, 3 indicates Y
+    PVec = np.mod(pD[:n]*2 + pD[n:],4)
+    PCorr = []
+    PauliStrings = 'IXZY'
+    for i,c in enumerate(PVec):
+        if c > 0:
+            PCorr.append((PauliStrings[c],[i]))
+    return PCorr + opList
+
+def Tv2RZZ(opName,qList):
+    '''convert multi-qubit transvection to sqrt(ZZ..Z) conjugated by SQC'''
+    opName = ZMat(opName)
+    newQlist = []
+    opList = []
+    SQCList = []
+    nB = len(opName) // 2
+    for i in range(nB):
+        P = opName[i] + 2*opName[i+nB]
+        ## check if identity
+        if P > 0:
+            newQlist.append(qList[i])
+            if P == 1:
+                ## X
+                SQCList.append(('H',[qList[i]]))
+                opList.append(('H',[qList[i]]))
+            elif P == 3:
+                ## Y
+                SQCList.append(('SH',[qList[i]]))
+                opList.append(('HS',[qList[i]]))        
+                # opList.append(('Z',[qList[i]]))   
+    nQ = len(newQlist)
+    opList.append(('RZZ',newQlist))
+    opList.extend(reversed(SQCList))
+    return opList
+
+def opList2RZZ(opList):
+    '''convert transvections in oplist to RZZ operators conjugated by SQC'''
+    temp = []
+    for (opName,qList) in opList:
+        if isTv2(opName):
+            temp += Tv2RZZ(opName,qList)
+        else:
+            temp.append((opName,qList))
+    return temp
+
+def perm2transp(ix):
+    '''convert permutation ix to list of transpositions SWAP'''
+    CList = perm2cycles(ix)
+    TList = []
+    for C in CList:
+        for i in range(len(C)-1):
+            TList.append((C[i],C[i-1]))
+    return TList
+
+def perm2cycles(ix):
+    '''convert permutation to cycles'''
+    n = len(ix)
+    todo = set(range(n))
+    CList = []
+    while len(todo) > 0:
+        a = min(todo)
+        C = []
+        done = False
+        while not done:
+            C.append(a)
+            todo.remove(a)
+            a = ix[a]
+            done = (a == C[0])
+        CList.append(C)
+    return CList
+
+def transp2perm(TList,n):
+    '''convert list of transpositions back to permutation ix'''
+    ix = np.arange(n)
+    for (a,b) in TList:
+        ix[a],ix[b] = ix[b],ix[a]
+    return ix
+
+def oplist2qiskit(opList,n):
+    '''convert qiskit circuit to opList'''
+    ## replace transvections with RZZ gates
+    opList = opList2RZZ(opList)
+    ## simplify mid-circuit Single-Qubit Cliffords
+    opList = SQCcollapse(opList)
+    ## create Qiskit quantum circuit
+    qc = qiskit.QuantumCircuit(n)
+    for (opName,qList) in opList:
+        if opName == 'RZZ':
+            qc.rzz(math.pi/2,qList[0],qList[1])
+        elif opName in {'CX','CNOT'}:
+            qc.cx(qList[0],qList[1])            
+        elif opName == 'CZ':
+            qc.cz(qList[0],qList[1])
+        ## single-qubit Cliffords
+        elif isSQC(opName):
+            q = qList[0]
+            for c in reversed(opName):
+                if c == 'H':
+                    qc.h(q)
+                elif c == 'S':
+                    qc.s(q)
+        ## Paulis
+        elif opName == 'X':
+            qc.x(qList[0])
+        elif opName == 'Y':
+            qc.y(qList[0])
+        elif opName == 'Z':
+            qc.z(qList[0])
+        ## Permutations
+        elif opName == 'QPerm':
+            for (p,q) in perm2transp(qList):
+                qc.swap(p,q)
+    return qc
 
 #########################################################################################################
 ## MW greedy algorithm
@@ -153,7 +292,7 @@ def csynth_greedy(A,params):
     currWait = 0
     dMax = 10000
     while h > 0.00001:
-        gateOpts = GLOptions(A,False) if mode == 'GL' else  SpOptions(A)
+        gateOpts = GLGateOpts(A,False) if mode == 'GL' else  SpGateOpts(A)
         dhMin,BMin = None,None
         for myOp in gateOpts:
             B = applyOp(A,myOp) 
@@ -179,11 +318,11 @@ def csynth_greedy(A,params):
         else:
             currWait += 1
         if (params.wMax > 0 and currWait > params.wMax):
-            return [],np.arange(n),[]
+            return [],A
     opList = opListInv(opList)
     return opList,A
 
-def SpOptions(U):
+def SpGateOpts(U):
     '''Transvection gate options for symplectic reduction'''
     m,n = symShape(U)
     ijList = set()
@@ -203,7 +342,7 @@ def SpOptions(U):
     vList = {(a % 2,b%2,a//2,b//2) for a in range(1,4) for b in range(1,4)}
     return {(v,ij) for v in vList for ij in ijList}
 
-def GLOptions(A,allOpts=False):
+def GLGateOpts(A,allOpts=False):
     '''CNOT gate options for GL reduction'''
     m,n = symShape(A)
     # return [(i,j) for i in range(n) for j in range(n) if i != j]
@@ -225,11 +364,9 @@ def SpHeuristic(U,params):
     UR0 = symR0(U)
     ## Rank 1 2x2 matrices - not U1 and not U2
     UR1 = symR1(UR2,UR0)
-    # URn = UR2 * n + UR1
     c1 = vecJoin(matColSum(UR1),matColSum(UR1.T)) if ht else matColSum(UR1)
     c2 = vecJoin(matColSum(UR2),matColSum(UR2.T)) if ht else matColSum(UR2)
     if hl:
-        # h = hr * np.sum(np.log(c1 + c2))/len(c1)
         h = matSum(np.log(c1 + c2))/len(c1)
     else:
         h = (matSum(UR1) + matSum(UR2))/n - 1
@@ -253,6 +390,7 @@ def GLHeuristic(U,params):
 def synth_astar(U,params):
     '''Astar using treap to manage size of priority queue'''
     mode,qMax = params.mode,params.qMax
+    m,n = symShape(U)
     Q = treap.treap()
     Utup = hash(tuple(U.ravel()))
     currId = 0
@@ -270,7 +408,7 @@ def synth_astar(U,params):
         A = applyOpList(opList,U)
         if (h < 0.000001):
             return opListInv(opList),A
-        myOpts = GLOptions(A) if mode=='GL' else SpOptions(A)
+        myOpts = GLGateOpts(A) if mode=='GL' else SpGateOpts(A)
         for myOp in myOpts:
             Ui = applyOp(A,myOp)
             Utup = hash(tuple(Ui.ravel()))
@@ -313,23 +451,29 @@ def csynth_opt(A,params):
     ACerts = [MatCanonize(U,mode) for U in AList]
     ACert = min(C[1] for C in ACerts)
     DBName = getDBName(n,mode,minDepth)
-    cnx,cur = dbConnect(DBName)
-    tableName = 'BData'
-    cmd = f'select BId,hex(B) from {tableName} where BCert = ?'
-    cur.execute(cmd,[ACert])
-    myData = cur.fetchone()
-    BId,B = myData
-    opList = DB2OpList(cur,tableName,BId)
-    B = bytes2sym(B,n)
-    Bix,BCert = MatCanonize(B,mode)
-    i = [C[1] for C in ACerts].index(BCert)
-    trans,inv,Aix = tA[i],iA[i],ACerts[i][0]
-    ix = ZMat(Bix[ixRev(Aix)])
-    r, c = m, n
-    if mode != 'GL':
-        r,c = 3*r,3*c
-    perms = [ix[:r], ix[r:] - r]
-    return DB2GL2(opList,trans,inv,perms) if mode=='GL' else DB2sym(opList,trans,inv,perms)
+    ## Check if database exists
+    if os.path.exists(f'{DBName}.db'):
+        cnx,cur = dbConnect(DBName)
+        tableName = 'BData'
+        cmd = f'select BId,hex(B) from {tableName} where BCert = ?'
+        cur.execute(cmd,[ACert])
+        myData = cur.fetchone()
+        if myData is not None:
+            BId,B = myData
+            cnx.close()
+            opList = DB2OpList(DBName,tableName,BId)
+            B = bytes2sym(B,n)
+            Bix,BCert = MatCanonize(B,mode)
+            i = [C[1] for C in ACerts].index(BCert)
+            trans,inv,Aix = tA[i],iA[i],ACerts[i][0]
+            ix = ZMat(Bix[ixRev(Aix)])
+            r, c = m, n
+            if mode != 'GL':
+                r,c = 3*r,3*c
+            perms = [ix[:r], ix[r:] - r]
+            return DB2GL2(opList,trans,inv,perms) if mode=='GL' else DB2sym(opList,trans,inv,perms)
+        print(f'could not find circuit in database {DBName}')
+    return []
 
 def DB2GL2(opList,trans,inv,perms):
     '''optimal synthesis - extract circuit for GL matrices'''
@@ -714,6 +858,9 @@ def csynth_pyzx(qc):
     zxcircuit = pyzx.Circuit.from_qasm(mytext)
     zxg = zxcircuit.to_graph()
     pyzx.simplify.full_reduce(zxg)
+    ## as recommended by Aleks Kissinger, 20250509 - crashes on Sp matrix files
+    # pyzx.simplify.teleport_reduce(zxg)
+    # pyzx.simplify.clifford_simp(zxg)
     c1=pyzx.extract_circuit(zxg)
     qc = qiskit.QuantumCircuit.from_qasm_str(c1.to_qasm())
     return qiskit2opList(qc)
@@ -797,10 +944,19 @@ def sym2components(U):
 ## rustiq
 ##########################################################
 
-def csynth_rustiq(U,iter=10):
+def csynth_rustiq(U,params,iter=10):
     '''Synthesize using rustiq package'''
     stabilisers = sym2PauliStr(U)
-    return rustiq.clifford_synthesis(stabilisers,rustiq.Metric.COUNT, syndrome_iter=iter)
+    mode = 'count'
+    if params.minDepth:
+        mode = 'depth'
+    if 'COUNT' in vars(rustiq.Metric):
+        ## original version of rustiq
+        myMet = rustiq.Metric.DEPTH if mode == 'depth' else rustiq.Metric.COUNT
+        return rustiq.clifford_synthesis(stabilisers,myMet, syndrome_iter=iter)
+    else:
+        ## new version of rustiq
+        return rustiq.clifford_synthesis(stabilisers,rustiq.Metric(mode), syndrome_iter=iter)
 
 def sym2PauliStr(U):
     '''convert symplectic matrix to Pauli strings for rustiq'''
@@ -963,6 +1119,17 @@ def symTest(U,opList):
     U2 = opList2sym(opList,n)
     return binMatEq(U,U2)
 
+def checkSynth(qc1,opList):
+    ## signs and symplectic matrix of circuit
+    sList1,U1 = qc2Sym(qc1)
+    m,n = symShape(U1)
+    ## make circuit from opList
+    qc2 = oplist2qiskit(opList, n)
+    ## signs and symplectic matrix of opList
+    sList2,U2 = qc2Sym(qc2)
+    ## signs and matrices must be equal
+    return np.sum(sList1 ^ sList2) == 0 and np.sum(U1 ^ U2) == 0
+
 def CNOT2opList(ix,opList):
     '''convert output of CNOT algorithm to an opList'''
     return [('QPerm',ix)] + [('CX',[i,j]) for (i,j) in opList]
@@ -985,12 +1152,15 @@ def opListLayers(opList):
                 layers[i].update(qList)
     return layers
 
+
+
 def applyOpList(opList,A,update=False):
     '''apply list of operations'''
     if type(opList) == tuple:
         opList = [opList]
     if not update:
         A = A.copy()
+    m,n = symShape(A)
     for myOp in opList:
         A = applyOp(A,myOp,True)
     return A
@@ -1009,6 +1179,14 @@ def applyOp(U,myOp,update=False):
         (i,j) = qList
         U[:,j] ^= U[:,i]
         U[:,n+i] ^= U[:,n+j]
+        # ## X1 Z2 and Y1 Y2 acquire a phase of -1 - (1,0,0,1) or (1,1,1,1)
+        # S = U[:,i] * U[:,j+n] * (1 ^ U[:,j] ^ U[:,i+n])
+    elif opType == "CZ":
+        (i,j) = qList
+        U[:,n+j] ^= U[:,i]
+        U[:,n+i] ^= U[:,j]
+        ## when both X1 and X2 set, apply phase of -1
+        # S = U[:,i] * U[:,j]
     elif isTv2(opType):
         U = applyTv2(U,opType,qList)
     elif isSQC(opType):
@@ -1059,7 +1237,7 @@ def opListTInv(opList):
     return temp
 
 def entanglingGateCount(opList):
-    '''count number of entangling gates in list of operataors opList'''
+    '''count number of entangling gates in list of operators opList'''
     c = 0
     for opName,qList in opList:
 
@@ -1084,7 +1262,7 @@ def str2opList(mystr):
     mystr = mystr.split()
     temp = []
     for myOp in mystr:
-        if len(myOp) > 3:
+        if len(myOp) >= 3:
             opType,qList = myOp.split(":")
             if opType[0].upper() == 'T':
                 opType = Pauli2bin(opType[1:])
@@ -1145,22 +1323,100 @@ def isIdPerm(ix):
 ## Single-qubit Clifford operators SQC
 ####################################################
 
+# def isSQC(opType):
+#     '''check if opType is a single-qubit Clifford'''
+#     global SQC_fromstr
+#     return opType in SQC_fromstr
+
+# def applySQC(U,opType,qList):
+#     '''apply single-qubit Clifford to U'''
+#     m,n = symShape(U)
+#     q = qList[0]
+#     A = str2SQC(opType)
+#     Ui = matMul(U[:,[q,q+n]],A,2)
+#     U[:,[q,q+n]] = Ui
+#     return U
+
+
 def isSQC(opType):
     '''check if opType is a single-qubit Clifford'''
-    global SQC_fromstr
-    return opType in SQC_fromstr
+    myChars = {c for c in opType} 
+    return len(myChars) > 0 and myChars.issubset({"H","S"})
 
 def applySQC(U,opType,qList):
     '''apply single-qubit Clifford to U'''
     m,n = symShape(U)
     q = qList[0]
-    A = str2SQC(opType)
-    Ui = matMul(U[:,[q,q+n]],A,2)
-    U[:,[q,q+n]] = Ui
+    for c in reversed(opType):
+        if c =="H":
+            ## apply phase of -1 to Y
+            # pList += 2 * U[q] * U[q+n]
+            ## swap X and Z components
+            U[:,[q,q+n]] = U[:,[q+n,q]]
+        elif c == "S":
+            ## apply phase of i where X-component is 1
+            # pList += U[q]
+            ## add X to Z component mod 2
+            U[:,q+n] ^= U[:,q]
+        # elif c == "Z":
+        #     ## apply phase of -1 where X-component is 1
+        #     pList += 2 * U[q]
+        # elif c == "X":
+        #     ## apply phase of -1 where Z-component is 1
+        #     pList += 2 * U[q+n]
+    # print(opType)
+    # print(ZMatPrint(U,tB=2))
+    # return np.mod(pList,4),U
     return U
+
+def SQCSimplify(SQCstr):
+    global SQC_fromstr
+    SQCstr = SQCstr.upper().replace(" ","")
+    if len(SQCstr) == 0:
+        return "I"
+    if len(SQCstr) == 1:
+        return SQCstr
+    A = ZMatI(2)
+    for c in SQCstr:
+        if c in SQC_fromstr:
+            A = matMul(SQC_fromstr[c],A,2)
+    # print('before',SQCstr)
+    # print(ZMatPrint(A,tB=2))
+    # print('after',SQC2str(A))
+    return SQC2str(A)
+
+def SQCcollapse(opList):
+    '''Simplify SQC'''
+    CList = dict()
+    temp = []
+    for opType,qList in reversed(opList):
+        # print(opType,qList)
+        if isSQC(opType):
+            ## join up SQCs into a string
+            q = qList[0]
+            if q not in CList:
+                CList[q] = ""
+            CList[q] =  CList[q] + opType 
+        else:
+            for q in qList:
+                ## clear out and apply any SQCs
+                if q in CList and len(CList[q]) > 0:
+                    SQCstr = SQCSimplify(CList[q])
+                    if (SQCstr != "I"): 
+                        temp.append((SQCstr,[q]))
+                    CList[q] = ""
+            temp.append ((opType, qList))
+        # print(CList)
+    for q in CList:
+        SQCstr = SQCSimplify(CList[q])
+        if (SQCstr != "I"): 
+            temp.append((SQCstr,[q]))
+    temp.reverse()
+    return temp
 
 def SQC2front(opList):
     '''move single-qubit Cliffords to front of opList'''
+    global SQC_fromstr
     CList = dict()
     temp = []
     for opType,qList in reversed(opList):
@@ -1173,11 +1429,13 @@ def SQC2front(opList):
             temp.append ((tuple(opType), qList))
         elif isSQC(opType):
             q = qList[0]
-            A = str2SQC(opType)
-            if q not in CList:
-                CList[q] = A
-            else:
-                CList[q] = matMul(A,CList[q],2)
+            for c in opType:
+                if c in SQC_fromstr:
+                    A = str2SQC(c)
+                    if q not in CList:
+                        CList[q] = A
+                    else:
+                        CList[q] = matMul(A,CList[q],2)
         elif opType == 'QPerm':
             CList = {qList[q]: CList[q] for q in CList.keys()}
             temp.append ((opType, qList))
@@ -1238,8 +1496,34 @@ def UC2ixCList(UC):
 ## Transvections
 ####################################################
 
+# def applyTv2(U,acbd,ij):
+#     '''Fast method for multiplying binary matrix U by 2-qubit transvection (acbd,ij)'''
+#     m,n = symShape(U)
+#     i,j = ij
+#     ## support of v
+#     ix = [i,j,i+n,j+n]
+#     ## support of Omega vT
+#     ixH = [i+n,j+n,i,j]
+#     ## non-zero of abcd
+#     nZ = bin2Set(acbd)
+#     ## calc U Omega vT - this is a col vector - non-zero entries are rows of U which anti-commute with v
+#     C = ZMatZeros(2*m)
+#     for k in nZ:
+#         C ^= U[:,ixH[k]]
+#     # print(func_name(),C)
+#     ## calc U + (U Omega vT)v - add v only where the row anti-commutes
+#     ## same as adding C only where v is non-zero
+#     temp = U.copy()
+#     for k in nZ:
+#         # print(f'updating col[{ix[k]}]')
+#         temp[:,ix[k]] ^= C
+#     return temp
+
 def applyTv2(U,acbd,ij):
     '''Fast method for multiplying binary matrix U by 2-qubit transvection (acbd,ij)'''
+    # print('pList0',pList)
+    # print('U')
+    # print(ZMatPrint(U,2))
     m,n = symShape(U)
     i,j = ij
     ## support of v
@@ -1249,14 +1533,31 @@ def applyTv2(U,acbd,ij):
     ## non-zero of abcd
     nZ = bin2Set(acbd)
     ## calc U Omega vT - this is a col vector - non-zero entries are rows of U which anti-commute with v
+    # Group commutator
     C = ZMatZeros(2*m)
+    # Sign - moving x component of transvection across Z-component of Pauli in each row of U
+    # S = ZMatZeros(2*m)
+    ## transvection phase
+    # a,c,b,d = acbd
+    # pTv = a * b + c * d
     for k in nZ:
         C ^= U[:,ixH[k]]
+        # if ix[k] < n:
+        #     S ^= U[:,ixH[k]]
+    # print(func_name(),C)
     ## calc U + (U Omega vT)v - add v only where the row anti-commutes
     ## same as adding C only where v is non-zero
     temp = U.copy()
     for k in nZ:
+        # print(f'updating col[{ix[k]}]')
         temp[:,ix[k]] ^= C
+    ## if row anticommutes, C[i] = 1. In this case, add a phase of i + phase of transvection + sign resulting from commuting X past Z
+    # pList += C*(1 + pTv + 2 * S)
+    # print('pTv',pTv)
+    # print('C',C)
+    # print('S',S)
+    # print('pList',pList)
+    # return np.mod(pList,4),temp
     return temp
 
 def Pauli2bin(mystr):
@@ -1273,6 +1574,7 @@ def TvTransp(opType):
     '''Transpose of transvection  swap X and Z components'''
     m = len(opType)//2
     return opType[m:] + opType[:m]
+
 
 ######################################################
 ## Random Clifford Generation
@@ -1477,13 +1779,11 @@ def ResumeDBGen(n,mode='GL',nWorkers=8,minDepth=False):
         ix, BCert = MatCanonize(B,mode)
         certLen = len(BCert)
         ## Set up new table
-        cnx,cur = dbConnect(DBName)
-        setupTable(cnx,tableName,certLen,n)
+        setupTable(DBName,tableName,certLen,n)
         ## insert identity matrix as only d=0 entry
         d,AId,opList,transp,inv = 0,-1,"",0,0
         myData = (sym2bytestr(B),BCert,AId,opList,transp,inv,d)
-        insertRows(cnx,[myData])
-        cnx.commit()
+        insertRows(DBName,[myData])
         BId,SId = 1,1
     else:
         cnx,cur = dbConnect(DBName)
@@ -1497,6 +1797,7 @@ def ResumeDBGen(n,mode='GL',nWorkers=8,minDepth=False):
             SId = 1 if d == 0 else BDict[d-1]+1
         else:
             d,SId,BId = -1,1,-1
+        cnx.close()
     print(f'd:{d} SId:{SId} BId:{BId}')
     while SId <= BId:
         d += 1
@@ -1509,21 +1810,23 @@ def ResumeDBGen(n,mode='GL',nWorkers=8,minDepth=False):
                 threadFuture = {executor.submit(optDBstep,n,mode,minDepth,d,steps0[i],steps1[i],i,certLen): i for i in range(len(steps1))}
                 for future in concurrent.futures.as_completed(threadFuture):
                     i = threadFuture[future]
+                    print(f'Thread {i} completed {currTimeStr()}')
                     ## merge once thread completed
-                    mergeData(cnx,n,mode,minDepth,i)
+                    # mergeData(DBName,n,mode,minDepth,i)
             ## just in case of threads crashing, make sure we merge data at the end also
             print(f'All level {d} threads completed - merging')
             for i in range(len(steps1)):
-                mergeData(cnx,n,mode,minDepth,i)
+                mergeData(DBName,i)
         else:
             optDBstep(n,mode,minDepth,d,SId,BId,None,None)
         ## starting index for next iteration = BId + 1
         SId = BId + 1
         ## BId for next iteration is row with highest Id
         cmd = f'select max(BId) from {tableName};'
+        cnx,cur = dbConnect(DBName)
         cur.execute(cmd)
         BId = int(cur.fetchone()[0])
-    cnx.close()
+        cnx.close()
     print(f'Run time {currTime() - sT:.3f}')
     return BId
 
@@ -1546,14 +1849,16 @@ def optDBstep(n,mode,minDepth,d,SId,BId,iter,certLen):
     if iter is not None:
         DBiter = DBName + f'_{iter:03}'
         if not os.path.exists(f'{DBiter}.db'):
-            cnx,cur = dbConnect(DBiter)
-            setupTable(cur,tableName,certLen,n)
+            setupTable(DBiter,tableName,certLen,n)
         else:
             cnx,cur = dbConnect(DBiter)
             cur.execute(f'select max(AId) from {tableName};')
             res = cur.fetchone()
             if res is not None:
                 SId = res[0]
+            cnx.close()
+    else:
+        DBiter = DBName
     print(f'd:{d} iter:{iter} SId:{SId},BId:{BId}')
     ## save possible moves  - note that that these are lists of ops
     if not minDepth:
@@ -1562,8 +1867,7 @@ def optDBstep(n,mode,minDepth,d,SId,BId,iter,certLen):
     cmd = f'select `BId`,hex(`B`),`op` from `{tableName}` where `BId` >= ? and `BId` <= ?'
     cur.execute(cmd,(SId,BId))
     AList = cur.fetchall()
-    if iter is not None:
-        cnx,cur = dbConnect(DBiter)
+    cnx.close()
     BData = []
     for myrow in AList:
         AId = myrow[0]
@@ -1579,30 +1883,32 @@ def optDBstep(n,mode,minDepth,d,SId,BId,iter,certLen):
                 BCert = minCert(B0,mode)
                 BData.append((sym2bytestr(B0),BCert,AId,opList2str(opList," "),Atrans,Ainv,d))
         if len(BData) > maxLen:
-            insertRows(cnx,BData)
+            insertRows(DBiter,BData)
             BData = []
     if len(BData) > 0:
-        insertRows(cnx,BData)
-    cnx.close()
+        insertRows(DBiter,BData)
     return 1
 
 ## SQLite3 Database
 
 def dbConnect(DBName):
     '''Connect to DBName'''
-    cnx = sqlite3.connect(f'{DBName}.db')
+    cnx = sqlite3.connect(f'{DBName}.db',autocommit=False)
     cur = cnx.cursor()
     return cnx,cur
 
 def getDBName(n, mode, minDepth):
     '''Get standard DB name - more complicated as we need to connect to package resources'''
+    if mode != "GL":
+        mode = "Sp"
     with impresources.path('cliffordopt', 'opt') as myPath:
         D = "D" if minDepth else ""
         return f'{myPath}/{mode}{D}_{n}'
     return None
 
-def insertRows(cnx,dataList):
+def insertRows(DBName,dataList):
     '''insert multiple rows into optimal database'''
+    cnx, cur = dbConnect(DBName)
     tableName = 'BData'
     fieldNames = ['B','BCert','AId','op','transp','inv','d']
     fn = ", ".join(fieldNames)
@@ -1610,31 +1916,37 @@ def insertRows(cnx,dataList):
     cmd = f'insert or ignore into `{tableName}` ({fn}) VALUES ({vals});'
     cnx.executemany(cmd,dataList)
     cnx.commit()
+    cnx.close()
     return 0
 
-def setupTable(cur,tableName,certLen,n):
+def setupTable(DBName,tableName,certLen,n):
     '''set up table for optimal database'''
+    cnx, cur = dbConnect(DBName)
     matLen = (4 * n * n - 1) // 8 + 1
     cmd = f'CREATE TABLE `{tableName}` (BId integer not null primary key, B BINARY({matLen}) , BCert CHAR ({certLen}) UNIQUE, AId int, op text, transp bool, inv bool, d tinyint );'
     cur.execute(cmd)
+    cnx.commit()
+    cnx.close()
 
 
-def mergeData(cnx,n,mode,minDepth,ixThread):
+def mergeData(DBName,ixThread):
     '''merge data from helper threads back into main database'''
-    dbName =   f'{getDBName(n,mode,minDepth)}_{ixThread:03}'
-    myFile = f'{dbName}.db'
+    DBIter =   f'{DBName}_{ixThread:03}'
+    cnx, cur = dbConnect(DBName)
+    myFile = f'{DBIter}.db'
     if os.path.exists(myFile):
-        print(f'merging {ixThread}')
+        print(f'merging thread {ixThread} {currTimeStr()}')
         tableName = "BData"
         fieldNames = ["B","BCert","AId","op","transp","inv","d"]
         fn = ", ".join(fieldNames)
         fnA = ", ".join([f"A.{s}" for s in fieldNames])
-        cnx.execute(f"ATTACH '{dbName}.db' as dbi")
+        cnx.execute(f"ATTACH '{DBIter}.db' as dbi")
         cmd = f'insert into {tableName} ({fn}) select {fnA} from dbi.{tableName} A where not exists (select A.BCert from {tableName} as B where A.BCert = B.BCert);'
         cnx.execute(cmd)
         cnx.commit()
         cnx.execute("detach database dbi")
-        DBclear(dbName)
+        cnx.close()
+        DBclear(DBIter)
 
 def DBclear(DBName):
     '''Clear helper optimal database file'''
@@ -1644,7 +1956,6 @@ def DBclear(DBName):
 
 
 ## Options for 2-qubit gates
-
 
 def DepthPart(qList,sList):
     '''Return lists of tuples of qubit indices in qList which increase depth of operator with support sList'''
@@ -1659,6 +1970,7 @@ def DepthPart(qList,sList):
                 qList1 = [qList[k] for k in range(i+1,sL) if k != j]
                 temp.extend([[p] + a2 for a2 in DepthPart(qList1,sList)])
     return temp
+
 
 def opMovesD(n,opList,mode='GL'):
     '''get possible moves - either CNOT (GL) or 2-qubit transvections'''
@@ -1700,14 +2012,17 @@ def opMoves(n,mode='GL'):
                     temp.append((acbd,(i,j)))
     return temp
 
-def retrieveRow(cur,tableName,BId):
+def retrieveRow(DBName,tableName,BId):
+    cnx,cur = dbConnect(DBName)
     cmd = f'select * from `{tableName}` where `BId`=?;'
     cur.execute(cmd,[BId])
-    return cur.fetchone()
+    res = cur.fetchone()
+    cnx.close()
+    return res
 
-def DB2OpList(cur,tableName,BId):
+def DB2OpList(DBName,tableName,BId):
     '''Recursive method to get opList from tree structure'''
-    data = retrieveRow(cur,tableName,BId)
+    data = retrieveRow(DBName,tableName,BId)
     # print(data)
     if data is None:
         return None
@@ -1716,7 +2031,7 @@ def DB2OpList(cur,tableName,BId):
         return [] 
     ## convert string to opList
     opList = str2opList(opList)
-    parentOps = DB2OpList(cur,tableName,AId)
+    parentOps = DB2OpList(DBName,tableName,AId)
     if inv:
         parentOps = opListInv(parentOps)
     if transp:
@@ -1767,6 +2082,7 @@ def correlDB(mode,n,minDepth=False):
     cur.execute(cmd)
     cmd = f'CREATE TABLE IF NOT EXISTS `corr` (d integer, Hs float, Hl float);'
     cur.execute(cmd)
+    cur.commit()
     cmd = f'select hex(B),d from {tableName}'
     cur.execute(cmd)
     for A,d in cur.fetchall():
@@ -1780,14 +2096,14 @@ def correlDB(mode,n,minDepth=False):
         cmd = f'insert into corr values (?,?,?)'
         cnx.execute(cmd,myrow)
         cnx.commit()
-    lCorr = colCorr(cnx,'Hl','d')
-    sCorr = colCorr(cnx,'Hs','d')
     cnx.close()
+    lCorr = colCorr(DBName,'Hl','d')
+    sCorr = colCorr(DBName,'Hs','d')
     return lCorr,sCorr
 
-def colCorr(cnx,xCol,yCol):
+def colCorr(DBName,xCol,yCol):
     '''calculate correlation between xCol and yCol'''
-    cur = cnx.cursor()
+    cnx,cur = dbConnect(DBName)
     cmd = f'select count({xCol}) from corr'
     cur.execute(cmd)
     N = cur.fetchone()[0]
@@ -1796,6 +2112,7 @@ def colCorr(cnx,xCol,yCol):
     print(cmd)
     cur.execute(cmd)
     Sx,Sy,Sxx,Syy,Sxy = cur.fetchone()
+    cnx.close()
     Cxx = (N * Sxx - Sx * Sx)
     Cxy = (N * Sxy - Sx * Sy)
     Cyy = (N * Syy - Sy * Sy)

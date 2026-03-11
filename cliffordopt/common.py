@@ -486,12 +486,16 @@ def ZMatPrint(A,N=None,nA=0,tB=1):
 
 def currTime():
     '''Return current time'''
+    return time.perf_counter()
     return time.time()
+
+def currTimeStr():
+    return time.strftime("%Y%m%d-%H:%M:%S")
 
 def startTimer():
     '''Start timer for algorithm and set global variable startTime to be the current time.'''
     global startTime
-    startTime = time.time()
+    startTime = currTime()
     return startTime
 
 def elapsedTime():

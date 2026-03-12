@@ -10,13 +10,12 @@ from importlib import resources as impresources
 from . import opt
 import qiskit, qiskit.circuit, qiskit.qasm2
 import os
-import math
 
 ## required for benchmarking against other methods, but not core functionality
 import stim
 import pyzx
-# import pytket, pytket.qasm, pytket.tableau, pytket.passes
-import rustiq
+import pytket, pytket.qasm, pytket.tableau, pytket.passes
+# import rustiq
 # from mqt import qmap, qecc
 
 #########################################################################################################
@@ -110,20 +109,19 @@ def synth_main(U,params,qc=None,sList=None):
 
     ## pytket: Sivarajah et al, t|ket⟩: a retargetable compiler for NISQ devices, https://dx.doi.org/10.1088/2058-9565/ab8e92
     elif params.method == 'pytket':
-        opList = csynth_tket(qc,params.methodName)
+        opList, qcStr = csynth_tket(qc,params.methodName)
 
     ## rustiq: Brugiere et a, A graph-state based synthesis framework for Clifford isometries, https://doi.org/10.22331/q-2025-01-14-1589
     elif params.method == 'rustiq':
-        opList = csynth_rustiq(U,params)
+        opList, qcStr = csynth_rustiq(U,params)
 
     ## pyzx: Kissinger, PyZX: Large Scale Automated Diagrammatic Reasoning, http://dx.doi.org/10.4204/EPTCS.318.14
     elif params.method == 'pyzx':
-        opList = csynth_pyzx(qc)
+        opList, qcStr = csynth_pyzx(qc)
 
     ## qiskit: greedy algorithm from Clifford Circuit Optimization with Templates and Symbolic Pauli Gates, https://doi.org/10.22331/q-2021-11-16-580
     elif params.method == 'qiskit':
-        circ = csynth_qiskit(qc,params.methodName)
-        opList = qiskit2opList(circ)
+        opList, qcStr =  csynth_qiskit(qc,params.methodName)
 
     ## volanto: Minimizing the Number of Two-qubit Gates in Clifford Circuits, https://doi.org/10.1007/978-3-031-26553-2_7
     elif params.method == 'volanto':
@@ -132,44 +130,75 @@ def synth_main(U,params,qc=None,sList=None):
     
     ## stim: Gidney, Stim: a fast stabilizer circuit simulator, https://doi.org/10.22331/q-2021-07-06-497
     elif params.method == 'stim':
-        opList = csynth_stim(U)
+        opList, qcStr = csynth_stim(U)
     
     ## if no method specified, just count gates in input circuit
     else:
-        opList = qiskit2opList(qc)
-
-    if len(opList) > 0:
-        opList = PauliCorrection(opList,n,sList)
+        opList, qcStr = qiskit2opList(qc), qc2qasm(qc)
 
     depth = len(opListLayers(opList))
     gateCount = entanglingGateCount(opList)
     procTime = currTime()-sT
-    circ = opList2str(opList,ch=" ")
-    MWalgs = ['optimal','volanto','greedy','astar','CNOT_optimal','CNOT_gaussian','CNOT_Patel','CNOT_greedy','CNOT_astar','CNOT_depth']
-    if params.method in MWalgs:
-        # check = symTest(U,opList)
-        check = checkSynth(qc,opList)
-    else:
-        check = ""
-    return n,gateCount,depth,procTime,check,circ
 
-def PauliCorrection(opList,n,sList=None):
+    MWalgs = ['optimal','volanto','greedy','astar','CNOT_optimal','CNOT_gaussian','CNOT_Patel','CNOT_greedy','CNOT_astar','CNOT_depth','CNOT_brug']
+    if params.method in MWalgs:
+        ## make circuit from opList
+        qc2 = oplist2qiskit(opList, n)
+    else:
+        qc2 = qiskit.QuantumCircuit.from_qasm_str(qcStr)
+    check,ix,sCorr = checkSynth(qc,qc2)
+    ## if ix is False, the symplectic matrices can't be mapped
+    if ix is not False:
+        ## Pauli Correction
+        if np.sum(sCorr) > 0:
+            ## update oplist and qc2
+            pc = PauliCorrection(sCorr)
+            opList = pc + opList
+            qc2 = oplist2qiskit(pc,n).compose(qc2)
+        ## Permutation - for pytket
+        if not nonDecreasing(ix):
+            ## update oplist and qc2
+            pc = [('QPerm',ix[:n])]
+            opList = opList + pc
+            qc2 = qc2.compose(oplist2qiskit(pc,n))
+        ## double-check circuit
+        check,ix,sCorr = checkSynth(qc,qc2)
+    ## qasm string
+    qcStr = qc2qasm(qc2)
+    ## convert oplist to string
+    circ = opList2str(opList,ch=" ")
+    return n,gateCount,depth,procTime,check,circ,qcStr
+
+# def PauliCorrection(opList,n,sList=None):
+#     '''Make sign corrections by applying Paulis to beginning of circuit'''
+#     if sList is None:
+#         sList = ZMatZeros(n * 2)
+#     ## check signs of circuit corresponding to opList
+#     qc = oplist2qiskit(opList,n)
+#     pC, U = qc2Sym(qc)
+#     ## difference in signs between this and sList
+#     pD = pC ^ sList
+#     ## Make phase vector modulo 4 - 1 indicates X, 2 indicates Z, 3 indicates Y
+#     PVec = np.mod(pD[:n]*2 + pD[n:],4)
+#     PCorr = []
+#     PauliStrings = 'IXZY'
+#     for i,c in enumerate(PVec):
+#         if c > 0:
+#             PCorr.append((PauliStrings[c],[i]))
+#     return PCorr + opList
+
+
+def PauliCorrection(pD):
     '''Make sign corrections by applying Paulis to beginning of circuit'''
-    if sList is None:
-        sList = ZMatZeros(n * 2)
-    ## check signs of circuit corresponding to opList
-    qc = oplist2qiskit(opList,n)
-    pC, U = qc2Sym(qc)
-    ## difference in signs between this and sList
-    pD = pC ^ sList
     ## Make phase vector modulo 4 - 1 indicates X, 2 indicates Z, 3 indicates Y
+    n = len(pD) // 2
     PVec = np.mod(pD[:n]*2 + pD[n:],4)
     PCorr = []
     PauliStrings = 'IXZY'
     for i,c in enumerate(PVec):
         if c > 0:
             PCorr.append((PauliStrings[c],[i]))
-    return PCorr + opList
+    return PCorr
 
 def Tv2RZZ(opName,qList):
     '''convert multi-qubit transvection to sqrt(ZZ..Z) conjugated by SQC'''
@@ -192,8 +221,8 @@ def Tv2RZZ(opName,qList):
                 SQCList.append(('SH',[qList[i]]))
                 opList.append(('HS',[qList[i]]))        
                 # opList.append(('Z',[qList[i]]))   
-    nQ = len(newQlist)
-    opList.append(('RZZ',newQlist))
+    # nQ = len(newQlist)
+    opList.append(((0,0,1,1),newQlist))
     opList.extend(reversed(SQCList))
     return opList
 
@@ -240,17 +269,20 @@ def transp2perm(TList,n):
         ix[a],ix[b] = ix[b],ix[a]
     return ix
 
-def oplist2qiskit(opList,n):
+def oplist2qiskit(opList,n,toRZZ=True):
     '''convert qiskit circuit to opList'''
+    global QiskitTvDict
     ## replace transvections with RZZ gates
-    opList = opList2RZZ(opList)
-    ## simplify mid-circuit Single-Qubit Cliffords
-    opList = SQCcollapse(opList)
+    if toRZZ:
+        opList = opList2RZZ(opList)
+        ## simplify mid-circuit Single-Qubit Cliffords
+        opList = SQCcollapse(opList)
     ## create Qiskit quantum circuit
     qc = qiskit.QuantumCircuit(n)
     for (opName,qList) in opList:
-        if opName == 'RZZ':
-            qc.rzz(math.pi/2,qList[0],qList[1])
+        if isTv2(opName):
+            PQ = TvName(opName)
+            qc.append(QiskitTvDict[PQ],qList)
         elif opName in {'CX','CNOT'}:
             qc.cx(qList[0],qList[1])            
         elif opName == 'CZ':
@@ -270,10 +302,21 @@ def oplist2qiskit(opList,n):
             qc.y(qList[0])
         elif opName == 'Z':
             qc.z(qList[0])
+        elif opName == 'Sd':
+            qc.sdg(qList[0])
+        elif opName == 'SqrtX':
+            qc.h(qList[0])
+            qc.s(qList[0])
+            qc.h(qList[0])
+        elif opName == 'SqrtXd':
+            qc.h(qList[0])
+            qc.sdg(qList[0])
+            qc.h(qList[0])
         ## Permutations
         elif opName == 'QPerm':
             for (p,q) in perm2transp(qList):
                 qc.swap(p,q)
+    # print(qc2qasm(qc))
     return qc
 
 #########################################################################################################
@@ -467,6 +510,7 @@ def csynth_opt(A,params):
             i = [C[1] for C in ACerts].index(BCert)
             trans,inv,Aix = tA[i],iA[i],ACerts[i][0]
             ix = ZMat(Bix[ixRev(Aix)])
+            # ix = ZMat(ixRev(Bix)[Aix])
             r, c = m, n
             if mode != 'GL':
                 r,c = 3*r,3*c
@@ -607,7 +651,7 @@ def CNOT_greedy_depth(A,verbose=False):
     ix = permMat2ix(A)
     if verbose:
         print(f'Qubit permutation: {ix}')
-    print(f'd={d}')
+    # print(f'd={d}')
     return ix,opList
 
 def matWt(A):
@@ -820,18 +864,19 @@ def csynth_qiskit(qc,method='greedy'):
     input is qiskit circuit qc''' 
     qc = qiskit.quantum_info.Clifford(qc)
     if method == 'ag':
-        return qiskit.synthesis.synth_clifford_ag(qc)
+        qc =  qiskit.synthesis.synth_clifford_ag(qc)
     elif method == 'layers':
-        return qiskit.synthesis.synth_clifford_layers(qc)
+        qc = qiskit.synthesis.synth_clifford_layers(qc)
     else:
-        return qiskit.synthesis.synth_clifford_greedy(qc)
+        qc = qiskit.synthesis.synth_clifford_greedy(qc)
+    return qiskit2opList(qc), qc2qasm(qc)
 
 def qiskit2opList(circ):
     '''convert qiskit circuit to opList'''
     opList = []
     for op in circ.data:
         opName = op.operation.name.upper()
-        qList = [q._index for q in op.qubits]
+        qList = [circ.find_bit(q).index for q in op.qubits]
         opList.append((opName, qList)) 
     return opList
 
@@ -861,9 +906,9 @@ def csynth_pyzx(qc):
     ## as recommended by Aleks Kissinger, 20250509 - crashes on Sp matrix files
     # pyzx.simplify.teleport_reduce(zxg)
     # pyzx.simplify.clifford_simp(zxg)
-    c1=pyzx.extract_circuit(zxg)
-    qc = qiskit.QuantumCircuit.from_qasm_str(c1.to_qasm())
-    return qiskit2opList(qc)
+    qcStr = pyzx.extract_circuit(zxg).to_qasm()
+    qc = qiskit.QuantumCircuit.from_qasm_str(qcStr)
+    return qiskit2opList(qc), qcStr
 
 #########################################################################################################
 ## Quantinuum tket: https://docs.quantinuum.com/tket/
@@ -884,8 +929,7 @@ def csynth_tket(qc,option='FullPeepholeOptimise',nReps=10):
         else:
             pytket.passes.FullPeepholeOptimise().apply(qc)
     # return opList
-    opList = tket2opList(qc)
-    return opList
+    return tket2opList(qc), pytket.qasm.qasm.circuit_to_qasm_str(qc)
 
 def tket2opList(circ):
     '''convert tket circuit to opList'''
@@ -893,6 +937,11 @@ def tket2opList(circ):
     for op in circ.get_commands():
         opList.append((str(op.op),[q.index[0] for q in op.qubits]))
     return opList
+
+
+# def tket2opList(circ):
+#     qc = pytket.extensions.qiskit.tk_to_qiskit(circ)
+#     return qiskit2opList(qc)
 
 #########################################################################################################
 ## Stim
@@ -904,7 +953,8 @@ def csynth_stim(U):
     xx,xz,zx,zz = sym2components(U)
     T = stim.Tableau.from_numpy(x2x=xx,x2z=xz,z2x=zx,z2z=zz)
     qc = T.to_circuit(method=submethods[0])
-    return stim2opList(qc)
+    qcStr = qc.to_qasm(open_qasm_version=2)
+    return stim2opList(qc), qcStr
 
 def stim2opList(qc):
     '''convert stim circuit to opList form'''
@@ -945,18 +995,22 @@ def sym2components(U):
 ##########################################################
 
 def csynth_rustiq(U,params,iter=10):
+    # print(func_name())
     '''Synthesize using rustiq package'''
     stabilisers = sym2PauliStr(U)
+    m,n = symShape(U)
     mode = 'count'
     if params.minDepth:
         mode = 'depth'
     if 'COUNT' in vars(rustiq.Metric):
         ## original version of rustiq
         myMet = rustiq.Metric.DEPTH if mode == 'depth' else rustiq.Metric.COUNT
-        return rustiq.clifford_synthesis(stabilisers,myMet, syndrome_iter=iter)
+        opList =  rustiq.clifford_synthesis(stabilisers,myMet, syndrome_iter=iter)
     else:
         ## new version of rustiq
-        return rustiq.clifford_synthesis(stabilisers,rustiq.Metric(mode), syndrome_iter=iter)
+        opList = rustiq.clifford_synthesis(stabilisers,rustiq.Metric(mode), syndrome_iter=iter)
+    qc = oplist2qiskit(opList,n)
+    return opList, qc2qasm(qc)
 
 def sym2PauliStr(U):
     '''convert symplectic matrix to Pauli strings for rustiq'''
@@ -1101,6 +1155,34 @@ def qc2qasm(qc):
     '''convert qiskit circuit object to qasm 2 string'''
     return qiskit.qasm2.dumps(qc)
 
+def QiskitTvInstr(PQ):
+    qc = qiskit.QuantumCircuit(2, name=f't{PQ}')
+    if PQ == 'XX':
+        qc.rxx(np.pi/2,0,1)
+    elif PQ == 'YY':
+        qc.ryy(np.pi/2,0,1)
+    elif PQ == 'ZZ':
+        qc.rzz(np.pi/2,0,1)
+    # non-standard for QASM
+    # elif PQ == 'ZX':
+    #     qc.rzx(np.pi/2,0,1)
+    # elif PQ == 'XZ':
+    #     qc.rzx(np.pi/2,1,0)
+    else:
+        for i,c in enumerate(PQ):
+            if c == 'Z':
+                qc.h(i)
+            elif c == 'Y':
+                qc.s(i)
+        qc.rxx(np.pi/2,0,1)
+        for i,c in enumerate(PQ):
+            if c == 'Z':
+                qc.h(i)
+            elif c == 'Y':
+                qc.sdg(i)
+    return qc.to_instruction()
+
+QiskitTvDict = {f'{P}{Q}':  QiskitTvInstr(f'{P}{Q}') for P in 'XYZ' for Q in 'XYZ'}
 
 #################################################################################
 ## opList Manipulations
@@ -1119,16 +1201,24 @@ def symTest(U,opList):
     U2 = opList2sym(opList,n)
     return binMatEq(U,U2)
 
-def checkSynth(qc1,opList):
+def getRowPerm(U1,U2):
+    U1 = [tuple(r) for r in U1]
+    U2 = [tuple(r) for r in U2]
+    if set(U1) != set(U2):
+        return False
+    ix1 = ZMat(argsort(U1))
+    ix2 = ZMat(argsort(U2))
+    return ix2[ixRev(ix1)]
+
+def checkSynth(qc1,qc2):
     ## signs and symplectic matrix of circuit
     sList1,U1 = qc2Sym(qc1)
-    m,n = symShape(U1)
-    ## make circuit from opList
-    qc2 = oplist2qiskit(opList, n)
     ## signs and symplectic matrix of opList
     sList2,U2 = qc2Sym(qc2)
     ## signs and matrices must be equal
-    return np.sum(sList1 ^ sList2) == 0 and np.sum(U1 ^ U2) == 0
+    ix = getRowPerm(U1.T,U2.T)
+    check = np.sum(sList1 ^ sList2) == 0 and np.sum(U1 ^ U2) == 0
+    return check,ix,sList1 ^ sList2
 
 def CNOT2opList(ix,opList):
     '''convert output of CNOT algorithm to an opList'''
@@ -1274,16 +1364,19 @@ def str2opList(mystr):
             temp.append((opType,qList))
     return temp
 
+def TvName(opName):
+    pauli_list = 'IXZY'
+    opName = ZMat(opName)
+    xz = opName[:2] + 2 * opName[2:]
+    return pauli_list[xz[0]] + pauli_list[xz[1]]
+
+
 def opList2str(opList,ch="\n"):
     '''convert oplist to string rep'''
-    pauli_list = ['I','X','Z','Y']
     temp = []
     for opName,qList in opList:
         if isTv2(opName):
-            opName = ZMat(opName)
-            xz = opName[:2] + 2 * opName[2:]
-            P = pauli_list[xz[0]] + pauli_list[xz[1]]
-            opName = f't{P}'
+            opName = f't{TvName(opName)}'
         elif typeName(opName) in ('tuple','ndarray'):
             opName = ZMat2str(opName)
         opName = opName.replace(" ","")
@@ -1323,51 +1416,51 @@ def isIdPerm(ix):
 ## Single-qubit Clifford operators SQC
 ####################################################
 
-# def isSQC(opType):
-#     '''check if opType is a single-qubit Clifford'''
-#     global SQC_fromstr
-#     return opType in SQC_fromstr
-
-# def applySQC(U,opType,qList):
-#     '''apply single-qubit Clifford to U'''
-#     m,n = symShape(U)
-#     q = qList[0]
-#     A = str2SQC(opType)
-#     Ui = matMul(U[:,[q,q+n]],A,2)
-#     U[:,[q,q+n]] = Ui
-#     return U
-
-
 def isSQC(opType):
     '''check if opType is a single-qubit Clifford'''
-    myChars = {c for c in opType} 
-    return len(myChars) > 0 and myChars.issubset({"H","S"})
+    global SQC_fromstr
+    return opType in SQC_fromstr
 
 def applySQC(U,opType,qList):
     '''apply single-qubit Clifford to U'''
     m,n = symShape(U)
     q = qList[0]
-    for c in reversed(opType):
-        if c =="H":
-            ## apply phase of -1 to Y
-            # pList += 2 * U[q] * U[q+n]
-            ## swap X and Z components
-            U[:,[q,q+n]] = U[:,[q+n,q]]
-        elif c == "S":
-            ## apply phase of i where X-component is 1
-            # pList += U[q]
-            ## add X to Z component mod 2
-            U[:,q+n] ^= U[:,q]
-        # elif c == "Z":
-        #     ## apply phase of -1 where X-component is 1
-        #     pList += 2 * U[q]
-        # elif c == "X":
-        #     ## apply phase of -1 where Z-component is 1
-        #     pList += 2 * U[q+n]
-    # print(opType)
-    # print(ZMatPrint(U,tB=2))
-    # return np.mod(pList,4),U
+    A = str2SQC(opType)
+    Ui = matMul(U[:,[q,q+n]],A,2)
+    U[:,[q,q+n]] = Ui
     return U
+
+
+# def isSQC(opType):
+#     '''check if opType is a single-qubit Clifford'''
+#     myChars = {c for c in opType} 
+#     return len(myChars) > 0 and myChars.issubset({"H","S"})
+
+# def applySQC(U,opType,qList):
+#     '''apply single-qubit Clifford to U'''
+#     m,n = symShape(U)
+#     q = qList[0]
+#     for c in reversed(opType):
+#         if c =="H":
+#             ## apply phase of -1 to Y
+#             # pList += 2 * U[q] * U[q+n]
+#             ## swap X and Z components
+#             U[:,[q,q+n]] = U[:,[q+n,q]]
+#         elif c == "S":
+#             ## apply phase of i where X-component is 1
+#             # pList += U[q]
+#             ## add X to Z component mod 2
+#             U[:,q+n] ^= U[:,q]
+#         # elif c == "Z":
+#         #     ## apply phase of -1 where X-component is 1
+#         #     pList += 2 * U[q]
+#         # elif c == "X":
+#         #     ## apply phase of -1 where Z-component is 1
+#         #     pList += 2 * U[q+n]
+#     # print(opType)
+#     # print(ZMatPrint(U,tB=2))
+#     # return np.mod(pList,4),U
+#     return U
 
 def SQCSimplify(SQCstr):
     global SQC_fromstr

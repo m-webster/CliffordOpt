@@ -138,7 +138,7 @@ It also replaces the initial qubit permutation with a series of SWAP gates.
 
 ## Citation 
 Paper: https://arxiv.org/abs/2503.14660
-
+```
 @misc{webster2025heuristicoptimalsynthesiscnot,
       title={Heuristic and Optimal Synthesis of CNOT and Clifford Circuits}, 
       author={Mark Webster and Stergios Koutsioumpas and Dan E Browne},
@@ -148,7 +148,7 @@ Paper: https://arxiv.org/abs/2503.14660
       primaryClass={quant-ph},
       url={https://arxiv.org/abs/2503.14660}, 
 }
-
+```
 Software
 ```
 @misc{cliffordopt,

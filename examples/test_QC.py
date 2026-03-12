@@ -1,3 +1,4 @@
+import qiskit.quantum_info
 from cliffordopt import *
 
 ## paste cicuit text in qasm2 format here
@@ -135,6 +136,74 @@ h q[4];'''
 # qreg q[2];
 # swap q[0], q[1];'''
 
+mytext = """OPENQASM 2.0;
+    include "qelib1.inc";
+    qreg q[10];
+    h q[0];
+    cx q[0],q[4];
+    h q[1];
+    cx q[1],q[3];
+    h q[1];
+    cx q[4],q[2];
+    cx q[3],q[4];
+    cx q[1],q[4];
+    h q[2];
+    cx q[2],q[3];
+    h q[0];
+    h q[1];
+    h q[2];
+    h q[3];
+    h q[4];
+    h q[5];
+    cx q[5], q[9];
+    h q[6];
+    cx q[6], q[8];
+    h q[6];
+    cx q[9], q[7];
+    cx q[8], q[9];
+    cx q[6], q[9];
+    h q[7];
+    cx q[7], q[8];
+    s q[8];
+    s q[8];
+    s q[5];
+    s q[5];
+    h q[0];
+    s q[0];
+    y q[2];
+    h q[4];
+    s q[4];
+    h q[5];
+    s q[5];
+   y q[7];
+    h q[9];
+    s q[9];
+    cx q[0], q[5];
+    cx q[2], q[7];
+    cx q[4], q[9];
+    cx q[0], q[9];
+    cx q[2], q[5];
+    cx q[4], q[7];
+    cx q[0], q[7];
+    cx q[2], q[9];
+    cx q[4], q[5];
+    s q[0];
+    z q[0];
+    h q[0];
+    y q[2];
+   s q[4];
+    z q[4];
+    h q[4];
+    s q[5];
+    z q[5];
+    h q[5];
+    y q[7];
+    s q[9];
+    z q[9];
+    h q[9];"""
+ 
+ 
+
 ###############################################
 ## Global parameters - don't change!!
 ###############################################
@@ -146,7 +215,7 @@ params.mode = 'Sp'
 ###############################################
 params.method = 'optimal' # available up to n=5
 params.method = 'astar'
-params.method = 'greedy'
+# params.method = 'greedy'
 
 ## optimise for depth or gate count
 params.minDepth = False
@@ -162,8 +231,8 @@ params.hl = 1 ## log of cols 1 or sums 0
 params.wMax = 0
 
 ## astar: 
-params.qMax = 10000 # max priority queue length 
-params.hr = 3 # scaling factor for heuristic
+params.qMax = 100 # max priority queue length 
+params.hr = 1.8 # scaling factor for heuristic
 
 ###############################################
 ## Existing Clifford Synthesis Algorithms
@@ -186,7 +255,7 @@ params.hr = 3 # scaling factor for heuristic
 ## Run Synthesis Algorithm
 ###############################################
 
-n,gateCount,depth,procTime,check,circ = synth_QC(mytext,params)
+n,gateCount,depth,procTime,check,circ,qcStr = synth_QC(mytext,params)
 
 if check != "":
     print(f'Check: {check}')
@@ -194,3 +263,4 @@ print(f'Entangling Gate Count: {gateCount}')
 print(f'Circuit Depth: {depth}')
 print(f'Processing time: {procTime}')
 print(circ)
+

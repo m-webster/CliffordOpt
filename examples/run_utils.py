@@ -14,15 +14,15 @@ def synthSave(C,i,params,circuitName=None):
     CName = "" if circuitName is None else f'\t{circuitName}'
     print(f'starting {i}')
     if params.mode == 'QC':
-        n,gateCount,depth,procTime,check,circ = synth_QC(C,params)
+        n,gateCount,depth,procTime,check,circ,qcStr = synth_QC(C,params)
     else:
         U = bin2ZMat(C)[0]
         n = int(np.round(np.sqrt(len(U))))
         U = np.reshape(U,(n,n))
         if params.mode == 'GL':
-            n,gateCount,depth,procTime,check,circ = synth_GL(U,params)
+            n,gateCount,depth,procTime,check,circ,qcStr = synth_GL(U,params)
         else:
-            n,gateCount,depth,procTime,check,circ = synth_Sp(U,params)
+            n,gateCount,depth,procTime,check,circ,qcStr = synth_Sp(U,params)
     f = open(params.outfile,'a')
     if params.astarRange:
         f.write(f'{i+1}{CName}\t{n}\t{params.hr}\t{gateCount}\t{depth}\t{procTime}\t{check}\t{circ}\n')
@@ -41,7 +41,7 @@ def defaultParser():
     '''parser for command line python scripts eg random_run, random_range, bravyi_run, bravyi_range'''
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", help="Source File for Matrices",type=str, default='GL_7.txt')
-    parser.add_argument("--method", help="Synthesis method - options are volanto, greedy, astar, qiskit, stim, pytket",type=str, default='greedy')
+    parser.add_argument("--method", help="Synthesis method - options are volanto, greedy, astar, qiskit, stim, pytket, pyzx, rustiq",type=str, default='greedy')
     parser.add_argument("--submethod", help="Submethod for qiskit or pytket only. Qiskit: 'greedy'=0,'ag'=1. Pytket: 'FullPeepholeOptimise'=0,'CliffordSimp'=1,'SynthesiseTket'=2,'CliffordResynthesis'=3",type=int, default=0)
     parser.add_argument("--mode", help="Type of Matrix",type=str, default='GL')  
     parser.add_argument("--ixMin", help="Start at circuit number ixMin",type=int, default=0)  

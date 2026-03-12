@@ -70,7 +70,7 @@ params.hr = 3 # scaling factor for heuristic
 ## Run Synthesis Algorithm
 ###############################################
 
-n,gateCount,depth,procTime,check,circ = synth_Sp(U,params)
+n,gateCount,depth,procTime,check,circ,qcStr = synth_Sp(U,params)
 
 if check != "":
     print(f'Check: {check}')

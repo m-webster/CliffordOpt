@@ -110,9 +110,9 @@ params.mode = 'Sp'
 ###############################################
 
 ## choose a method
-params.method = 'optimal'
+# params.method = 'optimal'
 params.method = 'astar'
-params.method = 'greedy'
+# params.method = 'greedy'
 
 ## optimise for depth or gate count
 params.minDepth = False
@@ -129,7 +129,7 @@ params.hr = 3 # scaling factor for heuristic
 params.wMax = 0
 
 ## astar: 
-params.qMax = 10000 # max priority queue length 
+params.qMax = 2000 # max priority queue length 
 
 ###############################################
 ## method: choose from 'pytket','qiskit','volanto','greedy','astar','stim'
@@ -169,7 +169,7 @@ params.qMax = 10000 # max priority queue length
 # cProfile.run(f'synth_GL(U,params)')
 
 ## Synthesize circuit
-n,gateCount,depth,procTime,check,circ = synth_Sp(U,params)
+n,gateCount,depth,procTime,check,circ,qcStr = synth_Sp(U,params)
 
 if check != "":
     print(f'Check: {check}')

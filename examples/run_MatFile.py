@@ -4,6 +4,8 @@ from run_utils import *
 if __name__ == '__main__':
     parser = defaultParser()
     params = parser.parse_args()
+    if params.file.upper()[:2] == "GL":
+        params.mode = "GL"
     params.infile = f'MatFiles/{params.file}'
     set_global_params(params)
     write_params(params)

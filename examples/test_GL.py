@@ -149,7 +149,7 @@ U = bin2ZMat(mytext)
 # cProfile.run(f'synth_GL(U,params)')
 
 ## Synthesize circuit
-n,gateCount,depth,procTime,check,circ = synth_GL(U,params)
+n,gateCount,depth,procTime,check,circ,qcStr = synth_GL(U,params)
 
 if check != "":
     print(f'Check: {check}')

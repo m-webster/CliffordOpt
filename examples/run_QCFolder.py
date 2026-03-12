@@ -39,15 +39,12 @@ if __name__ == '__main__':
     parser = defaultParser()
     params = parser.parse_args()
     params.mode = 'QC'
-    params.method = 'greedy'
-    params.file = f'SATCircuits/Random-Clifford/qsynth_0cost_swaps'
+    params.file = 'SATRandomCliffords'
     set_global_params(params)
     write_params(params)
 
     circuitList, circuitNames = readQCFolder(params.file)
-    # print(circuitNames)
     myrange = range(len(circuitList))
-    # myrange = range(32,len(circuitList))
 
     ## Test - run in serial
     for i in myrange:

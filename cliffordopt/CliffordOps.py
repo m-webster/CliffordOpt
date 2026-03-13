@@ -71,12 +71,6 @@ def transvection(v):
         Tv[i,i] ^= 1
     return Tv
 
-
-# def matWt(A):
-#     # sorted weights of columns and rows, returned as tuple for sorting
-#     sA = tuple(sorted(np.hstack([np.sum(A,axis=-1),np.sum(A,axis=0)]),reverse=False))
-#     return sA
-
 def permMat2ix(P):
     ## Check if this is a permutation matrix
     # print(func_name(),P)

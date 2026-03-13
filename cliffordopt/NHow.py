@@ -489,6 +489,7 @@ def matMulZ2(A,B):
             C[i,j] = temp
     return C
 
+
 @nb.njit (nb.int64[:](nb.int64[:,:]))
 def matColSum(A):
     m,n = A.shape

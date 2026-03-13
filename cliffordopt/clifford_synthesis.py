@@ -144,6 +144,12 @@ def synth_main(U,params,qc=None,sList=None):
     if params.method in MWalgs:
         ## make circuit from opList
         qc2 = oplist2qiskit(opList, n)
+        if params.entanglingGate == 'tZZ':
+            opList = opList2RZZ(opList)
+        if params.entanglingGate == 'CX':
+            opList = opList2CX(opList)
+        ## simplify mid-circuit Single-Qubit Cliffords
+        opList = SQCcollapse(opList)
     else:
         qc2 = qiskit.QuantumCircuit.from_qasm_str(qcStr)
     check,ix,sCorr = checkSynth(qc,qc2)
@@ -226,12 +232,69 @@ def Tv2RZZ(opName,qList):
     opList.extend(reversed(SQCList))
     return opList
 
+def Tv2CX(opName,qList):
+    '''convert multi-qubit transvection to sqrt(ZZ..Z) conjugated by SQC'''
+    '''
+    CX12 = S1 (SHS)2 tZX(12)
+    tXX(12) = HS1 (SHS)2 CX12 H1
+    tZZ(12) = S1 (SH)2 CX12 H2
+    tYY(12) = SH1 (HS)2 CX12 HSH1 S2
+    tZX(12) =  S1 (SHS)2 CX12
+    tZY(12) = S1 (HS)2 CX12 S2
+    tYX(12) = SH1 (SHS)2 CX12 HSH1
+    '''
+    opName = TvName(opName)
+    c1,c2 = opName
+    q1,q2 = qList
+    if c1 < c2:
+        ## ensure that first character is ge second to simplify compilation
+        c1,c2 = c2,c1
+        q1,q2 = q2,q1
+    temp = []
+    post = []
+    ## conjugate first qubit
+    if c1 == 'Z':
+        temp.append(('S',[q1]))
+    elif c1 == 'X':
+        temp.append(('HS',[q1]))
+        post.append(('H',[q1]))
+    elif c1 == 'Y':
+        temp.append(('SH',[q1]))
+        post.append(('HSH',[q1]))
+    ## second qubit
+    if c2 == 'Z':
+        temp.append(('SH',[q2]))
+        post.append(('H',[q2]))
+    elif c2 == 'X':
+        temp.append(('SHS',[q2]))
+    elif c2 == 'Y':
+        temp.append(('HS',[q2]))
+        post.append(('S',[q2]))
+    temp.append(('CX',[q1,q2]))
+    return temp + post
+
 def opList2RZZ(opList):
     '''convert transvections in oplist to RZZ operators conjugated by SQC'''
     temp = []
     for (opName,qList) in opList:
         if isTv2(opName):
             temp += Tv2RZZ(opName,qList)
+        elif opName in {'CX','CNOT'}:
+            temp += [('S',[qList[0]]),('HS',[qList[1]]),((0,0,1,1),qList),('H',[qList[1]]),]
+        elif opName == 'CZ':
+            temp += [('S',[qList[0]]),('S',[qList[1]]),((0,0,1,1),qList)]
+        else:
+            temp.append((opName,qList))
+    return temp
+
+def opList2CX(opList):
+    '''convert transvections in oplist to RZZ operators conjugated by SQC'''
+    temp = []
+    for (opName,qList) in opList:
+        if isTv2(opName):
+            temp += Tv2CX(opName,qList)
+        elif opName == 'CZ':
+            temp += [('H',[qList[1]]),('CX',qList),('H',[qList[1]])]
         else:
             temp.append((opName,qList))
     return temp
@@ -269,14 +332,10 @@ def transp2perm(TList,n):
         ix[a],ix[b] = ix[b],ix[a]
     return ix
 
-def oplist2qiskit(opList,n,toRZZ=True):
+def oplist2qiskit(opList,n):
     '''convert qiskit circuit to opList'''
     global QiskitTvDict
-    ## replace transvections with RZZ gates
-    if toRZZ:
-        opList = opList2RZZ(opList)
-        ## simplify mid-circuit Single-Qubit Cliffords
-        opList = SQCcollapse(opList)
+
     ## create Qiskit quantum circuit
     qc = qiskit.QuantumCircuit(n)
     for (opName,qList) in opList:

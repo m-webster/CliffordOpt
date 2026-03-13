@@ -12,9 +12,9 @@ import qiskit, qiskit.circuit, qiskit.qasm2
 import os
 
 ## required for benchmarking against other methods, but not core functionality
-import stim
-import pyzx
-import pytket, pytket.qasm, pytket.tableau, pytket.passes
+# import stim
+# import pyzx
+# import pytket, pytket.qasm, pytket.tableau, pytket.passes
 # import rustiq
 # from mqt import qmap, qecc
 

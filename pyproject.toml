@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "cliffordopt"
-version = "2.0.2"
+version = "2.0.4"
 description = "Clifford and CNOT Circuit optimisation."
 license = "GNUv3"
 authors = ["Mark Webster <mark.acacia@gmail.com>"]

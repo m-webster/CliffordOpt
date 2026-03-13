@@ -35,6 +35,9 @@ params.method = 'greedy'
 ## optimise for depth or gate count
 params.minDepth = False
 
+## options: tZZ for ZZ transvections, CX for CNOT or Any for no replacement
+params.entanglingGate = 'Any'
+
 ## heuristic settings
 params.hv = 1 ## vector
 params.hi = 1 ## include inverse

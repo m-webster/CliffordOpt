@@ -89,11 +89,11 @@ mytext = '''      [1 0 1 0 1|0 0 1 1 0]
       [0 0 0 0 0|0 1 1 1 1]'''
 
 ## [[8,3,3]] code
-mytext = '''      [1 0 0 0 1 0 1 1|0 0 1 0 1 1 0 1]
-      [0 0 0 1 0 1 1 1|1 0 1 0 0 1 1 0]
-      [0 1 0 0 1 1 1 0|0 0 1 1 1 0 1 0]
-      [0 0 0 1 0 1 1 1|0 1 0 1 1 0 0 1]
-      [0 0 1 1 1 0 1 0|0 0 0 1 0 1 1 1]'''
+# mytext = '''      [1 0 0 0 1 0 1 1|0 0 1 0 1 1 0 1]
+#       [0 0 0 1 0 1 1 1|1 0 1 0 0 1 1 0]
+#       [0 1 0 0 1 1 1 0|0 0 1 1 1 0 1 0]
+#       [0 0 0 1 0 1 1 1|0 1 0 1 1 0 0 1]
+#       [0 0 1 1 1 0 1 0|0 0 0 1 0 1 1 1]'''
 
 mytext = str2bin(mytext)
 S0 = bin2ZMat(mytext)
@@ -110,12 +110,15 @@ params.mode = 'Sp'
 ###############################################
 
 ## choose a method
-# params.method = 'optimal'
-params.method = 'astar'
+params.method = 'optimal'
+# params.method = 'astar'
 # params.method = 'greedy'
 
 ## optimise for depth or gate count
 params.minDepth = False
+
+## options: tZZ for ZZ transvections, CX for CNOT or Any for no replacement
+params.entanglingGate = 'Any'
 
 ## heuristic settings
 params.hv = 1 ## vector

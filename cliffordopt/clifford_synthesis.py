@@ -41,10 +41,6 @@ def synth_QC(qasmStr,params):
     ## make a Qiskit quantum circuit QASM text
     qc = qiskit.QuantumCircuit.from_qasm_str(qasmStr)
     sList,U = qc2Sym(qc)
-    # print(pList)
-    # print(ZMatPrint(U,tB=2))
-    ## run synthesis on the symplectic matrix U - comment out to run synthesis on the input circuit
-    # return synth_main(U,params)
     return synth_main(U,params,qc,sList)
 
 def synth_main(U,params,qc=None,sList=None):
@@ -568,8 +564,10 @@ def csynth_opt(A,params):
             Bix,BCert = MatCanonize(B,mode)
             i = [C[1] for C in ACerts].index(BCert)
             trans,inv,Aix = tA[i],iA[i],ACerts[i][0]
-            ix = ZMat(Bix[ixRev(Aix)])
-            # ix = ZMat(ixRev(Bix)[Aix])
+            ## Original
+            # ix = ZMat(Bix[ixRev(Aix)])
+            ## Stergios
+            ix = ZMat(ixRev(Bix)[Aix])
             r, c = m, n
             if mode != 'GL':
                 r,c = 3*r,3*c

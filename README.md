@@ -128,13 +128,15 @@ The correlDB(mode,n,minDepth) function calculates the H_sum and H_prod metrics, 
 For all methods, the synthesis now includes a set of Pauli corrections at the beginning of the circuit - this caters for any necessary sign corrections for the circuit. For pytket, the compilation may also include a permutation of the output qubits. 
 For all methods, a check is done to ensure that both signs and symplectic representation match the input circuit. 
 
-## Export to QASM - New 12 Mar 2026
-For all synthesis methods, a QASM string is returned which can be imported into Qiskit, Stim etc.
+## Export to QASM - New 15 Mar 2026
+For all synthesis methods, a QASM string is returned which can be imported into Qiskit, Stim etc. If required, a definition of any two-qubit transvection gates used is included. The initial qubit permutation is replaced with a series of SWAP gates. 
 
-##  Export to Qiskit Circuit Format - New 11 Mar 2026
-The output circuits can now be exported to Qiskit form using the function oplist2qiskit.
-This function replaces all 2-qubit transvections with RZZ gates, conjugated by single-qubit Cliffords where required. 
-It also replaces the initial qubit permutation with a series of SWAP gates. 
+##  Entangling Gate Choice - New 15 Mar 2026
+Users can now choose to synthesize using a desired two-qubit gate using the entanglingGate parameter. Choices include:
+- tZZ: $\pi/2$ RZZ rotations 
+- CZ: Controlled Z
+- CX: Controlled X
+- All: any two-qubit gate can be used.
 
 ## Citation 
 Paper: https://arxiv.org/abs/2503.14660

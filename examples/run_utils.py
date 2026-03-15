@@ -44,7 +44,7 @@ def defaultParser():
     parser.add_argument("--method", help="Synthesis method - options are volanto, greedy, astar, qiskit, stim, pytket, pyzx, rustiq",type=str, default='greedy')
     parser.add_argument("--submethod", help="Submethod for qiskit or pytket only. Qiskit: 'greedy'=0,'ag'=1. Pytket: 'FullPeepholeOptimise'=0,'CliffordSimp'=1,'SynthesiseTket'=2,'CliffordResynthesis'=3",type=int, default=0)
     parser.add_argument("--mode", help="Type of Matrix",type=str, default='GL')  
-    parser.add_argument("--entanglingGate", help="Type of Entangling Gate - tZZ to transform to ZZ transvections; CX for CNOTs; Any for no transformations",type=str, default='Any')  
+    parser.add_argument("--entanglingGate", help="Type of Entangling Gate - tZZ to transform to ZZ transvections; CZ for Controlled Z; CX for CNOTs; Any for no transformations",type=str, default='Any')  
     parser.add_argument("--ixMin", help="Start at circuit number ixMin",type=int, default=0)  
     parser.add_argument("--ixMax", help="Finish at circuit number ixMax",type=int, default=0)  
     parser.add_argument("--minDepth", help="Run Minimum Depth Optimisation",type=int, default=0)  

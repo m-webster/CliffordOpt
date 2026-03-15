@@ -142,6 +142,8 @@ def synth_main(U,params,qc=None,sList=None):
         qc2 = oplist2qiskit(opList, n)
         if params.entanglingGate == 'tZZ':
             opList = opList2RZZ(opList)
+        if params.entanglingGate == 'CZ':
+            opList = opList2CZ(opList)
         if params.entanglingGate == 'CX':
             opList = opList2CX(opList)
         ## simplify mid-circuit Single-Qubit Cliffords
@@ -202,31 +204,6 @@ def PauliCorrection(pD):
             PCorr.append((PauliStrings[c],[i]))
     return PCorr
 
-def Tv2RZZ(opName,qList):
-    '''convert multi-qubit transvection to sqrt(ZZ..Z) conjugated by SQC'''
-    opName = ZMat(opName)
-    newQlist = []
-    opList = []
-    SQCList = []
-    nB = len(opName) // 2
-    for i in range(nB):
-        P = opName[i] + 2*opName[i+nB]
-        ## check if identity
-        if P > 0:
-            newQlist.append(qList[i])
-            if P == 1:
-                ## X
-                SQCList.append(('H',[qList[i]]))
-                opList.append(('H',[qList[i]]))
-            elif P == 3:
-                ## Y
-                SQCList.append(('SH',[qList[i]]))
-                opList.append(('HS',[qList[i]]))        
-                # opList.append(('Z',[qList[i]]))   
-    # nQ = len(newQlist)
-    opList.append(((0,0,1,1),newQlist))
-    opList.extend(reversed(SQCList))
-    return opList
 
 def Tv2CX(opName,qList):
     '''convert multi-qubit transvection to sqrt(ZZ..Z) conjugated by SQC'''
@@ -269,6 +246,45 @@ def Tv2CX(opName,qList):
     temp.append(('CX',[q1,q2]))
     return temp + post
 
+
+def Tv2CZ(opName,qList):
+    '''convert multi-qubit transvection to sqrt(ZZ..Z) conjugated by SQC'''
+    '''
+    CZ12 = S1 S2 tZZ(12)
+    tZZ(12) = S1 S2 CZ12 
+    tXX(12) = HS1 HS2 CZ12 H1 H2
+    tYY(12) = SHS1 SHS2 CZ12 HS1 HS2
+    '''
+    opName = TvName(opName)
+    temp = []
+    post = []
+    for P,q in zip(opName,qList):
+        if P == 'Z':
+            temp.append(('S',[q]))
+        elif P == 'X':
+            temp.append(('HS',[q]))
+            post.append(('H',[q]))
+        elif P == 'Y':
+            temp.append(('SHS',[q]))
+            post.append(('HS',[q]))
+    temp.append(('CZ',qList))
+    return temp + post
+
+def Tv2RZZ(opName,qList):
+    '''convert multi-qubit transvection to sqrt(ZZ..Z) conjugated by SQC'''
+    opName = TvName(opName)
+    temp = []
+    post = []
+    for P,q in zip(opName,qList):
+        if P == 'X':
+            post.append(('H',[q]))
+            temp.append(('H',[q]))
+        elif P == 'Y':
+            post.append(('SH',[q]))
+            temp.append(('HS',[q]))        
+    temp.append(((0,0,1,1),qList))
+    return temp + post
+
 def opList2RZZ(opList):
     '''convert transvections in oplist to RZZ operators conjugated by SQC'''
     temp = []
@@ -291,6 +307,18 @@ def opList2CX(opList):
             temp += Tv2CX(opName,qList)
         elif opName == 'CZ':
             temp += [('H',[qList[1]]),('CX',qList),('H',[qList[1]])]
+        else:
+            temp.append((opName,qList))
+    return temp
+
+def opList2CZ(opList):
+    '''convert transvections in oplist to RZZ operators conjugated by SQC'''
+    temp = []
+    for (opName,qList) in opList:
+        if isTv2(opName):
+            temp += Tv2CZ(opName,qList)
+        elif opName == 'CX':
+            temp += [('H',[qList[1]]),('CZ',qList),('H',[qList[1]])]
         else:
             temp.append((opName,qList))
     return temp
